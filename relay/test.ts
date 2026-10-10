@@ -1,12 +1,14 @@
 import { WebSocket } from "ws";
 
 const URL = process.env.RELAY_URL ?? "ws://localhost:8787";
+// Remote relays need longer settle time between steps.
+const DELAY_SCALE = Number(process.env.DELAY_SCALE ?? 1);
 type Msg = Record<string, unknown>;
 interface Conn { ws: WebSocket; msgs: Msg[]; }
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
+  setTimeout(resolve, ms * DELAY_SCALE);
   return promise;
 }
 

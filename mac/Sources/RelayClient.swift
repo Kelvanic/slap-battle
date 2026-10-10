@@ -14,7 +14,8 @@ final class RelayClient: NSObject, ObservableObject, URLSessionWebSocketDelegate
   private var task: URLSessionWebSocketTask?
   private let url: URL
 
-  init(url: URL = URL(string: "ws://localhost:8787")!) { self.url = url }
+  init(url: URL = URL(string: ProcessInfo.processInfo.environment["SLAP_RELAY_URL"]
+    ?? "ws://lprjtzxw20a1qwtnx4yamduu.167.233.108.153.sslip.io")!) { self.url = url }
 
   func connect() {
     let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: .main)
