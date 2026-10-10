@@ -16,7 +16,12 @@ final class RelayClient: ObservableObject {
   @Published var name = "connecting…"
   @Published var mode = "private"
   @Published var room: String?
+  /// Who to show: a random arena sample (≤8) or the crew room. Never "everyone".
   @Published var peers: [String] = []
+  /// Total in the arena / room, independent of how many names we display.
+  @Published var onlineCount = 0
+  /// People you recently traded slaps with, newest first. Pinned above strangers.
+  @Published var rivals: [String] = []
   @Published var kinds: [String] = ["slap"]
   @Published var connected = false
   @Published var sent = 0
@@ -46,6 +51,9 @@ final class RelayClient: ObservableObject {
     Task { try? await t.send(.string(s)) }
   }
 
+  func shuffle() { send(["t": "shuffle"]) }
+  func slapRandom(_ kind: String) { send(["t": "slap_random", "kind": kind]) }
+
   private func receiveLoop(_ t: URLSessionWebSocketTask) async {
     while true {
       guard let msg = try? await t.receive() else { break }
@@ -74,20 +82,24 @@ final class RelayClient: ObservableObject {
         if let you = obj["you"] as? String { name = you }
         if let k = obj["slaps"] as? [String], !k.isEmpty { kinds = k }
         // Server always starts us private after (re)connect.
-        mode = "private"; room = nil; peers = []
+        mode = "private"; room = nil; peers = []; onlineCount = 0
       }
     case "presence":
       withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
         if let n = obj["names"] as? [String] { peers = n }
         if let m = obj["mode"] as? String { mode = m }
         if let you = obj["you"] as? String { name = you }
+        if let c = obj["count"] as? Int { onlineCount = c }
         room = obj["room"] as? String
       }
+    case "count":
+      if let c = obj["count"] as? Int { withAnimation(.spring) { onlineCount = c } }
     case "slapped":
       guard let from = obj["from"] as? String, let kind = obj["kind"] as? String else { return }
       withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
         taken += 1
         lastHitFrom = from
+        bumpRival(from)
         push(FeedItem(incoming: true, who: from, kind: kind, at: Date()))
       }
       onSlapped?(from, kind)
@@ -95,11 +107,26 @@ final class RelayClient: ObservableObject {
       guard let to = obj["to"] as? String, let kind = obj["kind"] as? String else { return }
       withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
         sent += 1
+        bumpRival(to)
         push(FeedItem(incoming: false, who: to, kind: kind, at: Date()))
+      }
+    case "slap_miss":
+      // "gone" = left the arena/room or renamed: stop showing them.
+      guard obj["reason"] as? String == "gone", let to = obj["to"] as? String, !to.isEmpty else { return }
+      withAnimation(.spring) {
+        peers.removeAll { $0 == to }
+        rivals.removeAll { $0 == to }
+        if lastHitFrom == to { lastHitFrom = nil }
       }
     default:
       break
     }
+  }
+
+  private func bumpRival(_ who: String) {
+    rivals.removeAll { $0 == who }
+    rivals.insert(who, at: 0)
+    if rivals.count > 5 { rivals.removeLast(rivals.count - 5) }
   }
 
   private func push(_ item: FeedItem) {

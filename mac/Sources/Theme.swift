@@ -115,37 +115,64 @@ struct FloatingPop: View {
   }
 }
 
-struct PeerRow: View {
-  let name: String
-  let kinds: [String]
-  let onSlap: (String) -> Void
-  let onBlock: () -> Void
-  let onReport: () -> Void
+/// Button that floats "+1 <emoji>" on every press, with a trackpad haptic tick.
+struct PopButton<Label: View>: View {
+  let emoji: String
+  let action: () -> Void
+  @ViewBuilder let label: () -> Label
 
-  private struct Pop: Identifiable { let id = UUID(); let emoji: String }
-  @State private var hover = false
+  private struct Pop: Identifiable { let id = UUID() }
   @State private var pops: [Pop] = []
 
   var body: some View {
+    Button {
+      let p = Pop()
+      pops.append(p)
+      NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+      action()
+      Task { try? await Task.sleep(for: .milliseconds(900)); pops.removeAll { $0.id == p.id } }
+    } label: {
+      label()
+    }
+    .buttonStyle(BouncyButtonStyle())
+    .overlay { ZStack { ForEach(pops) { _ in FloatingPop(emoji: emoji) } } }
+  }
+}
+
+struct PeerRow: View {
+  let name: String
+  let kind: String
+  var rival = false
+  let onSlap: () -> Void
+  let onBlock: () -> Void
+  let onReport: () -> Void
+
+  @State private var hover = false
+
+  var body: some View {
+    let tint = Theme.color[kind] ?? .pink
+    let emoji = Theme.emoji[kind] ?? "👋"
     HStack(spacing: 10) {
       Avatar(name: name, size: 30)
-      Text(name).font(.system(.callout, design: .rounded).weight(.semibold)).lineLimit(1)
-      Spacer(minLength: 4)
-      ForEach(kinds.prefix(4), id: \.self) { k in
-        Button {
-          let p = Pop(emoji: Theme.emoji[k] ?? "👋")
-          pops.append(p)
-          NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-          onSlap(k)
-          Task { try? await Task.sleep(for: .milliseconds(900)); pops.removeAll { $0.id == p.id } }
-        } label: {
-          Text(Theme.emoji[k] ?? "👋").font(.system(size: 17))
-            .frame(width: 30, height: 30)
-            .background(Circle().fill((Theme.color[k] ?? .pink).opacity(hover ? 0.28 : 0.14)))
+      VStack(alignment: .leading, spacing: 0) {
+        Text(name).font(.system(.callout, design: .rounded).weight(.semibold)).lineLimit(1)
+        if rival {
+          Text("🔥 rival").font(.caption2.weight(.bold)).foregroundStyle(.orange)
         }
-        .buttonStyle(BouncyButtonStyle())
-        .help(k.capitalized)
       }
+      Spacer(minLength: 4)
+      PopButton(emoji: emoji, action: onSlap) {
+        HStack(spacing: 4) {
+          Text(emoji)
+          Text("Slap").fontWeight(.heavy)
+        }
+        .font(.system(.callout, design: .rounded))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .leading, endPoint: .trailing), in: Capsule())
+        .shadow(color: tint.opacity(hover ? 0.5 : 0.2), radius: hover ? 8 : 3, y: 2)
+      }
+      .help("\(kind.capitalized) \(name)")
       Menu {
         Button("Block \(name)", role: .destructive, action: onBlock)
         Button("Report \(name)", action: onReport)
@@ -162,9 +189,6 @@ struct PeerRow: View {
         .fill(Color.primary.opacity(hover ? 0.10 : 0.05))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(hover ? 0.18 : 0.06)))
     )
-    .overlay(alignment: .trailing) {
-      ZStack { ForEach(pops) { FloatingPop(emoji: $0.emoji) } }.offset(x: -60)
-    }
     .scaleEffect(hover ? 1.015 : 1)
     .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }
   }

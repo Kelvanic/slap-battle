@@ -64,6 +64,7 @@ struct ContentView: View {
   @ObservedObject var fx: SlapFX
   @State private var room = ""
   @State private var diceSpin = 0.0
+  @State private var kind = "slap"
   @Namespace private var modeNS
 
   var body: some View {
@@ -77,7 +78,10 @@ struct ContentView: View {
       if relay.mode == Mode.crew.rawValue {
         roomBar.transition(.move(edge: .top).combined(with: .opacity))
       }
-      if let h = relay.lastHitFrom, relay.peers.contains(h) {
+      if relay.mode != Mode.solo.rawValue {
+        weaponPicker.transition(.move(edge: .top).combined(with: .opacity))
+      }
+      if let h = relay.lastHitFrom, relay.mode != Mode.solo.rawValue {
         slapBack(h).transition(.scale(scale: 0.8).combined(with: .opacity))
       }
       peers
@@ -169,7 +173,7 @@ struct ContentView: View {
 
   private func slapBack(_ who: String) -> some View {
     Button {
-      relay.send(["t": "slap", "to": who, "kind": "slap"])
+      relay.send(["t": "slap", "to": who, "kind": kind])
     } label: {
       HStack(spacing: 8) {
         Text("↩️").font(.title3)
@@ -188,53 +192,147 @@ struct ContentView: View {
     .buttonStyle(BouncyButtonStyle())
   }
 
+  private var weaponPicker: some View {
+    HStack(spacing: 8) {
+      Text("Weapon").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+      Spacer()
+      ForEach(relay.kinds, id: \.self) { k in
+        let selected = kind == k
+        let tint = Theme.color[k] ?? .pink
+        Button {
+          withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { kind = k }
+        } label: {
+          Text(Theme.emoji[k] ?? "👋")
+            .font(.system(size: selected ? 22 : 17))
+            .frame(width: 38, height: 38)
+            .background(Circle().fill(tint.opacity(selected ? 0.35 : 0.1)))
+            .overlay(Circle().strokeBorder(tint.opacity(selected ? 0.95 : 0), lineWidth: 2))
+            .scaleEffect(selected ? 1.08 : 1)
+        }
+        .buttonStyle(BouncyButtonStyle())
+        .help(k.capitalized)
+      }
+    }
+  }
+
+  private var countLabel: String {
+    switch relay.mode {
+    case Mode.arena.rawValue: "\(relay.onlineCount.formatted()) in the arena"
+    case Mode.crew.rawValue: "\(relay.onlineCount.formatted()) in the crew"
+    default: "Offline to everyone"
+    }
+  }
+
+  private var randomSlapButton: some View {
+    let canSlap = relay.onlineCount > 1
+    return PopButton(emoji: Theme.emoji[kind] ?? "👋") {
+      relay.slapRandom(kind)
+    } label: {
+      HStack(spacing: 10) {
+        Text("🎯").font(.title2)
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Slap a random stranger").font(.system(.callout, design: .rounded).weight(.heavy))
+          Text("out of \(max(relay.onlineCount - 1, 0).formatted()) people")
+            .font(.caption2.weight(.semibold))
+            .contentTransition(.numericText(value: Double(relay.onlineCount)))
+            .opacity(0.85)
+        }
+        Spacer()
+        Text(Theme.emoji[kind] ?? "👋").font(.title2)
+      }
+      .foregroundStyle(.white)
+      .padding(.horizontal, 14).padding(.vertical, 10)
+      .background(Theme.hot, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .shadow(color: .pink.opacity(0.35), radius: 10, y: 4)
+    }
+    .disabled(!canSlap)
+    .opacity(canSlap ? 1 : 0.45)
+  }
+
   private var peers: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    let inArena = relay.mode == Mode.arena.rawValue
+    let rivals = inArena ? relay.rivals : []
+    let strangers = relay.peers.filter { !rivals.contains($0) }
+    return VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
-        PulseDot(on: !relay.peers.isEmpty)
-        Text("Online · \(relay.peers.count)")
+        PulseDot(on: relay.onlineCount > 1)
+        Text(countLabel)
           .font(.caption.weight(.bold))
           .foregroundStyle(.secondary)
-          .contentTransition(.numericText(value: Double(relay.peers.count)))
+          .contentTransition(.numericText(value: Double(relay.onlineCount)))
         Spacer()
         if let r = relay.room, relay.mode == Mode.crew.rawValue {
           Text("#\(r)").font(.caption.monospaced().weight(.semibold)).foregroundStyle(.teal)
         }
       }
-      if relay.peers.isEmpty {
+      if inArena { randomSlapButton }
+      if rivals.isEmpty && strangers.isEmpty {
         emptyState
       } else {
         ScrollView {
-          LazyVStack(spacing: 6) {
-            ForEach(relay.peers, id: \.self) { peer in
-              PeerRow(
-                name: peer,
-                kinds: relay.kinds,
-                onSlap: { k in relay.send(["t": "slap", "to": peer, "kind": k]) },
-                onBlock: { relay.send(["t": "block", "name": peer]) },
-                onReport: { relay.send(["t": "report", "name": peer]) })
-              .transition(.asymmetric(
-                insertion: .move(edge: .trailing).combined(with: .opacity),
-                removal: .scale(scale: 0.6).combined(with: .opacity)))
+          LazyVStack(alignment: .leading, spacing: 6) {
+            if !rivals.isEmpty {
+              sectionTitle("🔥 Rivals")
+              ForEach(rivals, id: \.self) { row($0, rival: true) }
             }
+            if inArena && !strangers.isEmpty {
+              HStack {
+                sectionTitle("👀 Strangers")
+                Spacer()
+                Button { relay.shuffle() } label: {
+                  Label("Shuffle", systemImage: "shuffle").font(.caption.weight(.bold)).foregroundStyle(.pink)
+                }
+                .buttonStyle(BouncyButtonStyle())
+                .help("Show different random people")
+              }
+            }
+            ForEach(strangers, id: \.self) { row($0, rival: false) }
           }
           .padding(.vertical, 2)
         }
-        .frame(maxHeight: 230)
+        .frame(maxHeight: 260)
       }
     }
+  }
+
+  private func sectionTitle(_ s: String) -> some View {
+    Text(s).font(.caption.weight(.bold)).foregroundStyle(.secondary).padding(.top, 2)
+  }
+
+  private func row(_ peer: String, rival: Bool) -> some View {
+    PeerRow(
+      name: peer,
+      kind: kind,
+      rival: rival,
+      onSlap: { relay.send(["t": "slap", "to": peer, "kind": kind]) },
+      onBlock: {
+        relay.send(["t": "block", "name": peer])
+        withAnimation(.spring) {
+          relay.peers.removeAll { $0 == peer }
+          relay.rivals.removeAll { $0 == peer }
+        }
+      },
+      onReport: { relay.send(["t": "report", "name": peer]) })
+    .transition(.asymmetric(
+      insertion: .move(edge: .trailing).combined(with: .opacity),
+      removal: .scale(scale: 0.6).combined(with: .opacity)))
   }
 
   private var emptyState: some View {
     let (icon, text): (String, String) = switch relay.mode {
     case Mode.solo.rawValue: ("😇", "Solo mode — nobody can slap you.")
     case Mode.crew.rawValue: ("📡", "Waiting for your crew… share the room code.")
-    default: ("🥊", "Arena's empty. Be the first to throw hands.")
+    default: relay.onlineCount > 1
+      ? ("🎲", "Hit 🎯 above, or shuffle to see strangers.")
+      : ("🥊", "Arena's empty. Be the first to throw hands.")
     }
     return VStack(spacing: 6) {
       Text(icon).font(.system(size: 38))
         .phaseAnimator([0.0, -6.0]) { v, y in v.offset(y: y) } animation: { _ in .easeInOut(duration: 0.8) }
       Text(text).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+      if relay.mode == Mode.arena.rawValue && relay.onlineCount > 1 {
+        Button("🔀 Shuffle") { relay.shuffle() }.buttonStyle(BouncyButtonStyle()).font(.callout.weight(.bold))
+      }
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 18)

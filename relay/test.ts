@@ -33,50 +33,64 @@ function check(name: string, ok: boolean): void {
   console.log(ok ? `ok - ${name}` : `FAIL - ${name}`);
   if (ok) pass++; else fail++;
 }
+const send = (c: Conn, o: object) => c.ws.send(JSON.stringify(o));
+const last = (c: Conn, t: string) => [...c.msgs].reverse().find((m) => m.t === t);
+const slapsTo = (c: Conn) => c.msgs.filter((m) => m.t === "slapped").length;
 
 const a = await connect();
 const b = await connect();
 await delay(200);
-const ha = a.msgs.find((m) => m.t === "hello");
-const hb = b.msgs.find((m) => m.t === "hello");
-const nameA = typeof ha?.you === "string" ? ha.you : "";
-const nameB = typeof hb?.you === "string" ? hb.you : "";
+const nameA = String(a.msgs.find((m) => m.t === "hello")?.you ?? "");
+const nameB = String(b.msgs.find((m) => m.t === "hello")?.you ?? "");
 check("both get random names", nameA !== "" && nameB !== "" && nameA !== nameB);
-check("preset slaps listed", Array.isArray(ha?.slaps) && ha.slaps.includes("slap"));
+check("preset slaps listed", Array.isArray(a.msgs[0]?.slaps) && (a.msgs[0].slaps as unknown[]).includes("slap"));
 
-// private -> no slap delivery
-a.ws.send(JSON.stringify({ t: "slap", to: nameB, kind: "slap" }));
+send(a, { t: "slap", to: nameB, kind: "slap" });
 await delay(200);
-check("private mode blocks slap", !b.msgs.some((m) => m.t === "slapped"));
+check("private mode blocks slap", slapsTo(b) === 0 && last(a, "slap_miss")?.reason === "gone");
 
-// arena -> delivered
-a.ws.send(JSON.stringify({ t: "set_mode", mode: "arena" }));
-b.ws.send(JSON.stringify({ t: "set_mode", mode: "arena" }));
+send(a, { t: "set_mode", mode: "arena" });
+send(b, { t: "set_mode", mode: "arena" });
+await delay(300);
+send(a, { t: "shuffle" });
+await delay(300);
+const sample = last(a, "presence");
+const names = Array.isArray(sample?.names) ? (sample.names as unknown[]) : [];
+check("arena sample includes other player", names.includes(nameB));
+check("arena sample excludes self", !names.includes(nameA));
+await delay(1100);
+check("debounced arena count", last(a, "count")?.count === 2);
+
+send(a, { t: "slap", to: nameB, kind: "bonk" });
 await delay(200);
-a.ws.send(JSON.stringify({ t: "slap", to: nameB, kind: "bonk" }));
-await delay(200);
-const hit = b.msgs.find((m) => m.t === "slapped");
+const hit = last(b, "slapped");
 check("arena slap delivered with sender", hit?.from === nameA && hit?.kind === "bonk");
 
-// cooldown: immediate second slap to same target dropped
-const n0 = b.msgs.filter((m) => m.t === "slapped").length;
-a.ws.send(JSON.stringify({ t: "slap", to: nameB }));
+const n0 = slapsTo(b);
+send(a, { t: "slap", to: nameB });
 await delay(200);
-check("per-target cooldown enforced", b.msgs.filter((m) => m.t === "slapped").length === n0);
+check("per-target cooldown enforced", slapsTo(b) === n0 && last(a, "slap_miss")?.reason === "cooldown");
 
-// block
-b.ws.send(JSON.stringify({ t: "block", name: nameA }));
+await delay(1600);
+send(a, { t: "slap_random", kind: "splat" });
 await delay(300);
-a.ws.send(JSON.stringify({ t: "slap", to: nameB }));
-await delay(300);
-check("block stops slap", b.msgs.filter((m) => m.t === "slapped").length === n0);
+check("random slap finds a stranger", slapsTo(b) === n0 + 1 && last(b, "slapped")?.kind === "splat");
 
-// regen name
-b.ws.send(JSON.stringify({ t: "regen_name" }));
-await delay(200);
-const pres = [...a.msgs].reverse().find((m) => m.t === "presence");
-const names = Array.isArray(pres?.names) ? (pres.names as unknown[]) : [];
-check("regen rotates name", !names.includes(nameB));
+send(b, { t: "block", name: nameA });
+await delay(1700);
+const n1 = slapsTo(b);
+send(a, { t: "slap", to: nameB });
+await delay(300);
+check("block stops slap", slapsTo(b) === n1);
+
+send(b, { t: "regen_name" });
+await delay(300);
+const newB = String(last(b, "presence")?.you ?? "");
+check("regen rotates name", newB !== "" && newB !== nameB);
+
+send(a, { t: "slap", to: nameB });
+await delay(300);
+check("stale name reports gone", last(a, "slap_miss")?.reason === "gone");
 
 a.ws.close();
 b.ws.close();
