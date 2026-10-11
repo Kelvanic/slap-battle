@@ -28,13 +28,15 @@ SLAP_SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' ./build-app.sh
 open .build/SlapBattle.app
 ```
 
-Keep the bundle identifier `com.kelvanic.slapbattle` and signing identity consistent between releases so macOS can authorize the same Keychain item. Without `SLAP_SIGN_IDENTITY`, packaging uses an ad-hoc signature for development only. Developer ID signing is supported here; notarization and public distribution are separate steps and have not been completed.
+Keep the bundle identifier `com.kelvanic.slapbattle` and signing identity consistent between releases so macOS can authorize the same Keychain item. Without `SLAP_SIGN_IDENTITY`, packaging uses an ad-hoc signature for development only. Release artifacts are Developer ID-signed; notarization status must be checked in the release notes.
 
 ## CI, releases, and deployment
 
 Source and downloads are public at [Kelvanic/slap-battle](https://github.com/Kelvanic/slap-battle).
-Official distribution packages appear in [GitHub Releases](https://github.com/Kelvanic/slap-battle/releases)
-only after signing and notarization succeed. No notarized release has been published yet.
+Official distribution packages appear in [GitHub Releases](https://github.com/Kelvanic/slap-battle/releases).
+Notarization is required by default. The owner explicitly approved **v1.0.0 as
+Developer ID-signed but not notarized** while Apple credentials are unavailable.
+This release has not been checked by Apple's notarization service.
 
 - `CI`: pull requests, main pushes, and version tags run strict relay typechecks,
   Docker build, 22 protocol checks against an isolated TLS PostgreSQL container,
@@ -47,12 +49,30 @@ only after signing and notarization succeed. No notarized release has been publi
 - `Release`: push an existing release commit as `vMAJOR.MINOR.PATCH` (for example
   `git tag v0.1.0 && git push origin v0.1.0`) or manually select an existing tag.
   Successful CI for that exact commit is required. Both architectures must produce
-  accepted Apple notarizations and stapled packages before a public release appears.
+  accepted Apple notarizations and stapled packages before the automated workflow publishes.
 
-Each release contains `SlapBattle-VERSION-macos-arm64.dmg`, its stapled-app ZIP,
+Each release contains `SlapBattle-VERSION-macos-arm64.dmg`, an app ZIP,
 the corresponding `x86_64` DMG/ZIP, and `SHA256SUMS`. Choose arm64 for Apple Silicon,
 x86_64 for Intel. These are separate architecture packages, not a universal binary.
 Updates are manual downloads; an in-app automatic updater is not implemented.
+
+### Installing the signed-only v1.0.0 release
+
+Download the package for your Mac, open the DMG, and drag SlapBattle to Applications.
+Gatekeeper may block first launch because **v1.0.0 is not notarized**. Only if you
+trust the source and have verified the download, attempt to open the installed
+app, then choose System Settings → Privacy & Security → Open Anyway and confirm
+Open. This approves only Slap Battle; do not disable Gatekeeper or SIP, remove
+quarantine recursively, or override malware/damaged-app warnings.
+[Apple's guidance](https://support.apple.com/en-us/102445) explains this exception
+and notes that managed Macs may prohibit it. Notarization is still the preferred
+distribution path.
+
+Local signed-only packaging requires explicit `SLAP_ALLOW_UNNOTARIZED=1` alongside
+the version, build number, architecture, and Developer ID signing identity. It
+does not skip code signing and must never be described as notarized. The v1.0.0
+tag is excluded from automatic packaging because it is released manually under
+this exception. All other automatic tag releases still require notarization.
 
 ### Required GitHub configuration
 

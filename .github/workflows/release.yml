@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+      # v1.0.0 is the explicitly approved, manually packaged signed-only release.
+      - '!v1.0.0'
   workflow_dispatch:
     inputs:
       tag:

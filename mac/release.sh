@@ -19,11 +19,16 @@ PROFILE="${SLAP_NOTARY_PROFILE:-}"
 API_KEY_ID="${APPLE_NOTARY_KEY_ID:-}"
 API_ISSUER_ID="${APPLE_NOTARY_ISSUER_ID:-}"
 API_KEY="${APPLE_NOTARY_PRIVATE_KEY:-}"
+ALLOW_UNNOTARIZED="${SLAP_ALLOW_UNNOTARIZED:-0}"
+[[ "$ALLOW_UNNOTARIZED" == 0 || "$ALLOW_UNNOTARIZED" == 1 ]] || fail 'SLAP_ALLOW_UNNOTARIZED must be 0 or 1.'
+if [[ "$ALLOW_UNNOTARIZED" == 1 ]]; then
+  printf 'WARNING: explicitly requested signed-only release; packages are NOT notarized.\n' >&2
+fi
 if [[ -n "$PROFILE" ]]; then
   if [[ -n "$API_KEY_ID$API_ISSUER_ID$API_KEY" ]]; then
     fail 'Use either SLAP_NOTARY_PROFILE or the complete App Store Connect API key credentials, not both.'
   fi
-else
+elif [[ "$ALLOW_UNNOTARIZED" != 1 ]]; then
   [[ -n "$API_KEY_ID" && -n "$API_ISSUER_ID" && -n "$API_KEY" ]] || fail 'Notarization is required: set SLAP_NOTARY_PROFILE locally or APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER_ID, and APPLE_NOTARY_PRIVATE_KEY.'
 fi
 
@@ -103,11 +108,13 @@ notarize() {
 mkdir -p "$OUTPUT_DIR"
 DMG_NAME="$APP_NAME-$VERSION-macos-$ARCH.dmg"
 ZIP_NAME="$APP_NAME-$VERSION-macos-$ARCH.zip"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/$ZIP_NAME"
-notarize "$WORK/$ZIP_NAME"
-xcrun stapler staple "$APP"
-xcrun stapler validate "$APP"
-spctl --assess --type execute --verbose=2 "$APP"
+if [[ "$ALLOW_UNNOTARIZED" != 1 ]]; then
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/$ZIP_NAME"
+  notarize "$WORK/$ZIP_NAME"
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  spctl --assess --type execute --verbose=2 "$APP"
+fi
 
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUTPUT_DIR/$ZIP_NAME"
 STAGE="$WORK/dmg-root"
@@ -117,9 +124,11 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "$APP_NAME $VERSION ($ARCH)" -srcfolder "$STAGE" -ov -format UDZO "$OUTPUT_DIR/$DMG_NAME" >/dev/null
 codesign --force --timestamp --sign "$IDENTITY" "$OUTPUT_DIR/$DMG_NAME"
 codesign --verify --strict --verbose=2 "$OUTPUT_DIR/$DMG_NAME"
-notarize "$OUTPUT_DIR/$DMG_NAME"
-xcrun stapler staple "$OUTPUT_DIR/$DMG_NAME"
-xcrun stapler validate "$OUTPUT_DIR/$DMG_NAME"
-spctl --assess --type open --context context:primary-signature --verbose=2 "$OUTPUT_DIR/$DMG_NAME"
+if [[ "$ALLOW_UNNOTARIZED" != 1 ]]; then
+  notarize "$OUTPUT_DIR/$DMG_NAME"
+  xcrun stapler staple "$OUTPUT_DIR/$DMG_NAME"
+  xcrun stapler validate "$OUTPUT_DIR/$DMG_NAME"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "$OUTPUT_DIR/$DMG_NAME"
+fi
 
 printf '%s\n' "$OUTPUT_DIR/$DMG_NAME" "$OUTPUT_DIR/$ZIP_NAME"
