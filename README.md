@@ -45,16 +45,16 @@ iconutil -c icns Assets/SlapBattle.iconset -o Assets/SlapBattle.icns
 ```
 
 The menu-bar status icon remains a monochrome system symbol for readability.
-The published v1.0.0 download assets are immutable and do not include this later
-artwork; build from current source or use the next release for the illustrated icon.
+The published v1.0.0 download assets are unchanged. The illustrated icon is included
+starting with v1.1.0.
 
 ## CI, releases, and deployment
 
 Source and downloads are public at [Kelvanic/slap-battle](https://github.com/Kelvanic/slap-battle).
 Official distribution packages appear in [GitHub Releases](https://github.com/Kelvanic/slap-battle/releases).
-Notarization is required by default. The owner explicitly approved **v1.0.0 as
+Notarization is required by default. The owner approved **v1.0.0 and v1.1.0 as
 Developer ID-signed but not notarized** while Apple credentials are unavailable.
-This release has not been checked by Apple's notarization service.
+These releases have not been checked by Apple's notarization service.
 
 - `CI`: pull requests, main pushes, and version tags run strict relay typechecks,
   Docker build, 22 protocol checks against an isolated TLS PostgreSQL container,
@@ -88,13 +88,14 @@ app version; device credentials and usernames are never included. No GitHub logi
 or API token is needed. Notification preferences/deduplication are stored in the
 app's UserDefaults, separate from the permanent identity in Keychain.
 
-The original v1.0.0 assets do not contain update notifications or the later app
-icon. These features are in current source and the next packaged release.
+The original v1.0.0 assets do not contain update notifications or the app icon.
+Both features are included in v1.1.0. Version 1.0.0 users must download v1.1.0
+manually once; v1.1.0 can notify them about subsequent releases.
 
-### Installing the signed-only v1.0.0 release
+### Installing the signed-only v1.0.0 or v1.1.0 release
 
 Download the package for your Mac, open the DMG, and drag SlapBattle to Applications.
-Gatekeeper may block first launch because **v1.0.0 is not notarized**. Only if you
+Gatekeeper may block first launch because **these releases are not notarized**. Only if you
 trust the source and have verified the download, attempt to open the installed
 app, then choose System Settings → Privacy & Security → Open Anyway and confirm
 Open. This approves only Slap Battle; do not disable Gatekeeper or SIP, remove
@@ -106,8 +107,8 @@ distribution path.
 Local signed-only packaging requires explicit `SLAP_ALLOW_UNNOTARIZED=1` alongside
 the version, build number, architecture, and Developer ID signing identity. It
 does not skip code signing and must never be described as notarized. The v1.0.0
-tag is excluded from automatic packaging because it is released manually under
-this exception. All other automatic tag releases still require notarization.
+and v1.1.0 tags are excluded from automatic packaging because they are released
+manually under this exception. All other automatic tag releases require notarization.
 
 ### Required GitHub configuration
 
