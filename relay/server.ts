@@ -1,16 +1,16 @@
-import { WebSocketServer, WebSocket } from "ws";
-import { randomName } from "./names";
+import { WebSocketServer, WebSocket, type RawData } from "ws";
+import { z } from "zod";
+import { IdentityStore } from "./identity-store";
 
 type Mode = "private" | "crew" | "arena";
 type OutMsg = Record<string, string | number | boolean | string[] | null>;
 interface Peer {
-  ws: WebSocket; name: string; mode: Mode; room: string | null;
+  ws: WebSocket; readonly name: string; mode: Mode; room: string | null;
   blocked: Set<string>; mutedUntil: number;
   lastSlap: Map<string, number>; hits: number[]; sentTimes: number[]; lastShuffle: number;
 }
 
 const peers = new Map<string, Peer>();
-const taken = new Set<string>();
 const rooms = new Map<string, Set<string>>();
 const reportsAgainst = new Map<string, Set<string>>();
 // Arena membership as array + index map: O(1) join/leave/random pick at any size.
@@ -27,6 +27,13 @@ const SAMPLE_SIZE = 8;
 const SHUFFLE_CD_MS = 400;
 const COUNT_DEBOUNCE_MS = 1000;
 
+const IDENTIFY_TIMEOUT_MS = 5_000;
+const MAX_PAYLOAD_BYTES = 1_024;
+const IdentifyMessageSchema = z.object({
+  t: z.literal("identify"),
+  token: z.string().length(64).regex(/^[0-9a-f]{64}$/),
+}).strict();
+
 const PRESET_SLAPS: Record<string, true> = { slap: true, bonk: true, splat: true, thwack: true };
 const SLAP_KINDS = Object.keys(PRESET_SLAPS);
 
@@ -39,6 +46,15 @@ function field(m: object, key: string): string | undefined {
   if (!(key in m)) return undefined;
   const v: unknown = (m as Record<string, unknown>)[key];
   return typeof v === "string" ? v : undefined;
+}
+
+function parseMessage(raw: RawData): unknown {
+  const text = Buffer.isBuffer(raw)
+    ? raw.toString("utf8")
+    : raw instanceof ArrayBuffer
+      ? Buffer.from(raw).toString("utf8")
+      : Buffer.concat(raw).toString("utf8");
+  return JSON.parse(text) as unknown;
 }
 
 let countTimer: NodeJS.Timeout | null = null;
@@ -146,20 +162,64 @@ function deliverSlap(p: Peer, target: Peer, kind: string, now: number): string |
   return null;
 }
 
-const wss = new WebSocketServer({ port: PORT });
+const identityStore = new IdentityStore();
+const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_PAYLOAD_BYTES });
+wss.on("listening", () => {
+  const address = wss.address();
+  const port = typeof address === "object" && address !== null ? address.port : PORT;
+  console.log(`slap-battle relay on ws://localhost:${port}`);
+});
 wss.on("connection", (ws) => {
-  const name = randomName(taken);
-  taken.add(name);
-  const p: Peer = {
-    ws, name, mode: "private", room: null, blocked: new Set(), mutedUntil: 0,
-    lastSlap: new Map(), hits: [], sentTimes: [], lastShuffle: 0,
-  };
-  peers.set(name, p);
-  send(p, { t: "hello", you: name, modes: ["private", "crew", "arena"], slaps: SLAP_KINDS });
+  let p: Peer | null = null;
+  let identifyExpired = false;
+  const identifyTimeout = setTimeout(() => {
+    identifyExpired = true;
+    ws.close(1008, "identify timeout");
+  }, IDENTIFY_TIMEOUT_MS);
+
+  ws.on("close", () => {
+    clearTimeout(identifyTimeout);
+    if (!p || peers.get(p.name) !== p) return;
+    const oldRoom = leaveCurrent(p);
+    peers.delete(p.name);
+    reportsAgainst.delete(p.name);
+    notifyRoom(oldRoom);
+  });
 
   ws.on("message", (raw) => {
+    if (!p) {
+      if (identifyExpired || ws.readyState !== WebSocket.OPEN) return;
+      let message: unknown;
+      try { message = parseMessage(raw); } catch {
+        ws.close(1008, "invalid identify");
+        return;
+      }
+      const identify = IdentifyMessageSchema.safeParse(message);
+      if (!identify.success) {
+        ws.close(1008, "invalid identify");
+        return;
+      }
+      clearTimeout(identifyTimeout);
+      const name = identityStore.nameFor(identify.data.token);
+      const previous = peers.get(name);
+      let oldRoom: string | null = null;
+      if (previous) {
+        oldRoom = leaveCurrent(previous);
+        previous.ws.close(4409, "identity_in_use");
+      }
+      p = {
+        ws, name, mode: "private", room: null, blocked: new Set(), mutedUntil: 0,
+        lastSlap: new Map(), hits: [], sentTimes: [], lastShuffle: 0,
+      };
+      peers.set(name, p);
+      reportsAgainst.delete(name);
+      notifyRoom(oldRoom);
+      send(p, { t: "hello", you: name, modes: ["private", "crew", "arena"], slaps: SLAP_KINDS, stable: true });
+      return;
+    }
+
     let m: unknown;
-    try { m = JSON.parse(String(raw)) as unknown; } catch { return; }
+    try { m = parseMessage(raw); } catch { return; }
     if (typeof m !== "object" || m === null) return;
     const now = Date.now();
 
@@ -180,18 +240,6 @@ wss.on("connection", (ws) => {
         sendPresence(p);
         notifyRoom(oldRoom);
         if (p.room !== oldRoom) notifyRoom(p.room);
-        break;
-      }
-      case "regen_name": {
-        const old = p.name;
-        const next = randomName(taken);
-        taken.delete(old); taken.add(next);
-        const i = arenaIdx.get(old);
-        if (i !== undefined) { arena[i] = next; arenaIdx.delete(old); arenaIdx.set(next, i); }
-        if (p.room) { rooms.get(p.room)?.delete(old); rooms.get(p.room)?.add(next); }
-        peers.delete(old); p.name = next; peers.set(next, p);
-        sendPresence(p);
-        notifyRoom(p.room);
         break;
       }
       case "shuffle": {
@@ -245,14 +293,5 @@ wss.on("connection", (ws) => {
       }
     }
   });
-
-  ws.on("close", () => {
-    const oldRoom = leaveCurrent(p);
-    peers.delete(p.name);
-    taken.delete(p.name);
-    reportsAgainst.delete(p.name);
-    notifyRoom(oldRoom);
-  });
 });
 
-console.log(`slap-battle relay on ws://localhost:${PORT}`);

@@ -27,29 +27,89 @@ final class RelayClient: ObservableObject {
   @Published var sent = 0
   @Published var taken = 0
   @Published var lastHitFrom: String?
+  @Published var statusError: String?
+
   @Published var feed: [FeedItem] = []
   var onSlapped: (@MainActor (String, String) -> Void)?
 
   private let session = URLSession(configuration: .ephemeral)
   private var task: URLSessionWebSocketTask?
   private let url: URL
+  private let identity: DeviceIdentity
+  private var identityToken: String?
 
-  init(url: URL = URL(string: ProcessInfo.processInfo.environment["SLAP_RELAY_URL"]
-    ?? "ws://lprjtzxw20a1qwtnx4yamduu.167.233.108.153.sslip.io")!) { self.url = url }
+  init(
+    url: URL = URL(string: ProcessInfo.processInfo.environment["SLAP_RELAY_URL"]
+      ?? "wss://lprjtzxw20a1qwtnx4yamduu.167.233.108.153.sslip.io")!,
+    identity: DeviceIdentity = DeviceIdentity()
+  ) {
+    self.url = url
+    self.identity = identity
+  }
 
   func connect() {
+    guard statusError == nil, task == nil else { return }
+    guard Self.permits(url) else {
+      statusError = "Relay URL must use secure wss, or ws on localhost only."
+      return
+    }
+    if identityToken == nil {
+      do {
+        identityToken = try identity.loadOrCreateToken()
+      } catch {
+        statusError = error.localizedDescription
+        return
+      }
+    }
+    guard let token = identityToken else { return }
+
     let t = session.webSocketTask(with: url)
     task = t
     t.resume()
-    Task { await receiveLoop(t) }
+    Task {
+      do {
+        let data = try JSONSerialization.data(withJSONObject: ["t": "identify", "token": token])
+        guard let message = String(data: data, encoding: .utf8) else {
+          throw DeviceIdentityError.malformedCredential
+        }
+        try await t.send(.string(message))
+        await receiveLoop(t)
+      } catch {
+        t.cancel(with: .goingAway, reason: nil)
+        await connectionEnded(t)
+      }
+    }
+  }
+
+  private static func permits(_ url: URL) -> Bool {
+    guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+      return false
+    }
+    if scheme == "wss" { return true }
+    guard scheme == "ws" else { return false }
+    return host == "localhost" || host == "127.0.0.1" || host == "::1"
+  }
+
+  private func connectionEnded(_ t: URLSessionWebSocketTask) async {
+    guard task === t else { return }
+    task = nil
+    if t.closeCode.rawValue == 4409 {
+      statusError = "Another copy of Slap Battle is using this Mac's identity. Quit that copy before reopening this one."
+    } else if t.closeCode == .policyViolation {
+      statusError = "The relay rejected this Mac's identity. It was not regenerated."
+    }
+    withAnimation { connected = false }
+    try? await Task.sleep(for: .seconds(2))
+    if task == nil, statusError == nil { connect() }
   }
 
   func send(_ obj: [String: String]) {
-    guard let t = task,
+    guard connected, let t = task,
           let data = try? JSONSerialization.data(withJSONObject: obj),
           let s = String(data: data, encoding: .utf8) else { return }
     Task { try? await t.send(.string(s)) }
   }
+
 
   func shuffle() { send(["t": "shuffle"]) }
   func slapRandom(_ kind: String) { send(["t": "slap_random", "kind": kind]) }
@@ -59,10 +119,7 @@ final class RelayClient: ObservableObject {
       guard let msg = try? await t.receive() else { break }
       handle(msg)
     }
-    guard task === t else { return }
-    withAnimation { connected = false }
-    try? await Task.sleep(for: .seconds(2))
-    if task === t { connect() }
+    await connectionEnded(t)
   }
 
   private func handle(_ msg: URLSessionWebSocketTask.Message) {
@@ -111,7 +168,7 @@ final class RelayClient: ObservableObject {
         push(FeedItem(incoming: false, who: to, kind: kind, at: Date()))
       }
     case "slap_miss":
-      // "gone" = left the arena/room or renamed: stop showing them.
+      // "gone" = left the arena/room: stop showing them.
       guard obj["reason"] as? String == "gone", let to = obj["to"] as? String, !to.isEmpty else { return }
       withAnimation(.spring) {
         peers.removeAll { $0 == to }

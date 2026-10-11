@@ -4,3 +4,7 @@ node_modules/
 *.xcodeproj/
 .DS_Store
 .env
+relay/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

@@ -3,20 +3,36 @@ import SwiftUI
 enum Theme {
   static let emoji: [String: String] = ["slap": "👋", "bonk": "🔨", "splat": "💥", "thwack": "🫳"]
   static let verb: [String: String] = ["slap": "SLAPPED", "bonk": "BONKED", "splat": "SPLATTED", "thwack": "THWACKED"]
-  static let color: [String: Color] = ["slap": .pink, "bonk": .orange, "splat": .purple, "thwack": .cyan]
+  static let accent = adaptive(
+    light: NSColor(srgbRed: 0.29, green: 0.40, blue: 0.50, alpha: 1),
+    dark: NSColor(srgbRed: 0.65, green: 0.74, blue: 0.81, alpha: 1))
+  static let actionFill = Color(red: 0.29, green: 0.40, blue: 0.50)
+  static let positive = adaptive(
+    light: NSColor(srgbRed: 0.36, green: 0.49, blue: 0.40, alpha: 1),
+    dark: NSColor(srgbRed: 0.57, green: 0.70, blue: 0.60, alpha: 1))
+  static let warning = adaptive(
+    light: NSColor(srgbRed: 0.59, green: 0.36, blue: 0.31, alpha: 1),
+    dark: NSColor(srgbRed: 0.80, green: 0.58, blue: 0.52, alpha: 1))
+  static let surface = Color(nsColor: .windowBackgroundColor)
+  static let selection = Color(nsColor: .controlBackgroundColor)
+  static let inset = Color.primary.opacity(0.035)
+  static let border = Color.primary.opacity(0.08)
+  static let color: [String: Color] = [
+    "slap": accent, "bonk": accent, "splat": accent, "thwack": accent
+  ]
 
-  /// Stable per-name gradient so a player keeps their color everywhere.
-  static func avatarGradient(for name: String) -> LinearGradient {
+  /// Stable, muted identity colors rather than saturated avatar gradients.
+  static func avatarColor(for name: String) -> Color {
     var h: UInt64 = 1_469_598_103_934_665_603
     for b in name.utf8 { h = (h ^ UInt64(b)) &* 1_099_511_628_211 }
-    let hue = Double(h % 360) / 360
-    return LinearGradient(
-      colors: [Color(hue: hue, saturation: 0.75, brightness: 0.98),
-               Color(hue: (hue + 0.13).truncatingRemainder(dividingBy: 1), saturation: 0.85, brightness: 0.72)],
-      startPoint: .topLeading, endPoint: .bottomTrailing)
+    return Color(hue: Double(h % 360) / 360, saturation: 0.19, brightness: 0.52)
   }
 
-  static let hot = LinearGradient(colors: [.pink, .orange], startPoint: .leading, endPoint: .trailing)
+  private static func adaptive(light: NSColor, dark: NSColor) -> Color {
+    Color(nsColor: NSColor(name: nil) { appearance in
+      appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+    })
+  }
 }
 
 struct Avatar: View {
@@ -26,49 +42,30 @@ struct Avatar: View {
   var body: some View {
     let initials = name.split(separator: "-").prefix(2).compactMap(\.first).map { String($0) }.joined().uppercased()
     Circle()
-      .fill(Theme.avatarGradient(for: name))
-      .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
-      .overlay(Text(initials).font(.system(size: size * 0.38, weight: .heavy, design: .rounded)).foregroundStyle(.white))
+      .fill(Theme.avatarColor(for: name))
+      .overlay(Circle().strokeBorder(Theme.border, lineWidth: 1))
+      .overlay(Text(initials).font(.system(size: size * 0.38, weight: .semibold)).foregroundStyle(.white))
       .frame(width: size, height: size)
-      .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
   }
 }
 
 struct BouncyButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed ? 0.82 : 1)
-      .animation(.spring(response: 0.25, dampingFraction: 0.45), value: configuration.isPressed)
+      .scaleEffect(configuration.isPressed ? 0.96 : 1)
+      .animation(.spring(response: 0.25, dampingFraction: 0.8), value: configuration.isPressed)
   }
 }
 
-/// Drifting blurred color blobs behind the panel. Only renders while the menu is open.
-struct AnimatedBackdrop: View {
-  var body: some View {
-    TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
-      let t = ctx.date.timeIntervalSinceReferenceDate
-      ZStack {
-        blob(.pink, 230).offset(x: cos(t * 0.6) * 90, y: sin(t * 0.5) * 110 - 120)
-        blob(.orange, 200).offset(x: sin(t * 0.4) * 100, y: cos(t * 0.7) * 100 + 140)
-        blob(.purple, 250).offset(x: cos(t * 0.3 + 2) * 110, y: sin(t * 0.45 + 1) * 80)
-      }
-    }
-    .allowsHitTesting(false)
-  }
-
-  private func blob(_ c: Color, _ d: CGFloat) -> some View {
-    Circle().fill(c.opacity(0.32)).frame(width: d, height: d).blur(radius: 60)
-  }
-}
 
 struct PulseDot: View {
   let on: Bool
   var body: some View {
-    let c: Color = on ? .green : .red
-    Circle().fill(c).frame(width: 8, height: 8)
+    let c: Color = on ? Theme.positive : .secondary
+    Circle().fill(c).frame(width: 6, height: 6)
       .background(
-        Circle().fill(c.opacity(0.5))
-          .phaseAnimator([false, true]) { v, p in v.scaleEffect(p ? 2.4 : 1).opacity(p ? 0 : 0.8) }
+        Circle().fill(c.opacity(0.14))
+          .phaseAnimator([false, true]) { v, p in v.scaleEffect(p ? 1.6 : 1).opacity(p ? 0 : 0.5) }
             animation: { p in p ? .easeOut(duration: 1.2) : .linear(duration: 0) }
       )
   }
@@ -78,7 +75,6 @@ struct StatPill: View {
   let icon: String
   let label: String
   let value: Int
-  let tint: Color
 
   var body: some View {
     HStack(spacing: 8) {
@@ -86,15 +82,15 @@ struct StatPill: View {
       VStack(alignment: .leading, spacing: 0) {
         Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
         Text("\(value)")
-          .font(.system(.title3, design: .rounded).weight(.black))
+          .font(.system(.title3).weight(.semibold))
           .contentTransition(.numericText(value: Double(value)))
-          .foregroundStyle(tint)
+          .foregroundStyle(.primary)
       }
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 12).padding(.vertical, 8)
     .frame(maxWidth: .infinity)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .background(Theme.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     .animation(.spring(response: 0.4, dampingFraction: 0.6), value: value)
   }
 }
@@ -105,8 +101,8 @@ struct FloatingPop: View {
 
   var body: some View {
     Text("+1 \(emoji)")
-      .font(.system(.headline, design: .rounded).weight(.black))
-      .foregroundStyle(Theme.hot)
+      .font(.headline.weight(.semibold))
+      .foregroundStyle(Theme.accent)
       .offset(y: go ? -48 : 0)
       .scaleEffect(go ? 1.3 : 0.6)
       .opacity(go ? 0 : 1)
@@ -150,27 +146,26 @@ struct PeerRow: View {
   @State private var hover = false
 
   var body: some View {
-    let tint = Theme.color[kind] ?? .pink
+    let tint = Theme.color[kind] ?? Theme.accent
     let emoji = Theme.emoji[kind] ?? "👋"
     HStack(spacing: 10) {
       Avatar(name: name, size: 30)
       VStack(alignment: .leading, spacing: 0) {
-        Text(name).font(.system(.callout, design: .rounded).weight(.semibold)).lineLimit(1)
+        Text(name).font(.callout.weight(.medium)).lineLimit(1)
         if rival {
-          Text("🔥 rival").font(.caption2.weight(.bold)).foregroundStyle(.orange)
+          Text("rival").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
         }
       }
       Spacer(minLength: 4)
       PopButton(emoji: emoji, action: onSlap) {
         HStack(spacing: 4) {
           Text(emoji)
-          Text("Slap").fontWeight(.heavy)
+          Text("Slap").fontWeight(.semibold)
         }
-        .font(.system(.callout, design: .rounded))
-        .foregroundStyle(.white)
+        .font(.callout)
+        .foregroundStyle(tint)
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .leading, endPoint: .trailing), in: Capsule())
-        .shadow(color: tint.opacity(hover ? 0.5 : 0.2), radius: hover ? 8 : 3, y: 2)
+        .background(tint.opacity(hover ? 0.14 : 0.08), in: Capsule())
       }
       .help("\(kind.capitalized) \(name)")
       Menu {
@@ -185,9 +180,9 @@ struct PeerRow: View {
     }
     .padding(.horizontal, 10).padding(.vertical, 7)
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(Color.primary.opacity(hover ? 0.10 : 0.05))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(hover ? 0.18 : 0.06)))
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(Color.primary.opacity(hover ? 0.055 : 0.025))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border))
     )
     .scaleEffect(hover ? 1.015 : 1)
     .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }

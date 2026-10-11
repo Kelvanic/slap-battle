@@ -1,31 +1,126 @@
-import { WebSocket } from "ws";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WebSocket, type RawData } from "ws";
+import { z } from "zod";
+import { IdentityStore, newIdentityToken } from "./identity-store";
 
 const URL = process.env.RELAY_URL ?? "ws://localhost:8787";
-// Remote relays need longer settle time between steps.
-const DELAY_SCALE = Number(process.env.DELAY_SCALE ?? 1);
-type Msg = Record<string, unknown>;
+const WAIT_MS = 10_000;
+const MessageSchema = z.object({ t: z.string() }).passthrough();
+type Msg = z.infer<typeof MessageSchema>;
 interface Conn { ws: WebSocket; msgs: Msg[]; }
+interface Closed { code: number; reason: string; }
 
-function delay(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms * DELAY_SCALE);
-  return promise;
+function decode(raw: RawData): Msg | null {
+  const text = Buffer.isBuffer(raw)
+    ? raw.toString("utf8")
+    : raw instanceof ArrayBuffer
+      ? Buffer.from(raw).toString("utf8")
+      : Buffer.concat(raw).toString("utf8");
+  try {
+    const value: unknown = JSON.parse(text);
+    const parsed = MessageSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
-function connect(): Promise<Conn> {
-  const { promise, resolve, reject } = Promise.withResolvers<Conn>();
-  const ws = new WebSocket(URL);
-  const msgs: Msg[] = [];
-  ws.on("message", (d) => {
-    try {
-      const v: unknown = JSON.parse(String(d));
-      if (typeof v === "object" && v !== null) msgs.push(v as Msg);
-    } catch { /* ignore malformed */ }
+async function openSocket(url: string): Promise<WebSocket> {
+  const pending = Promise.withResolvers<WebSocket>();
+  const ws = new WebSocket(url);
+  ws.once("open", () => pending.resolve(ws));
+  ws.once("error", (error) => pending.reject(error));
+  return pending.promise;
+}
+
+function track(ws: WebSocket): Conn {
+  const conn: Conn = { ws, msgs: [] };
+  ws.on("message", (raw) => {
+    const message = decode(raw);
+    if (message) conn.msgs.push(message);
   });
-  ws.on("open", () => resolve({ ws, msgs }));
-  ws.on("error", reject);
-  return promise;
+  return conn;
 }
+
+async function connect(token: string, url = URL): Promise<Conn> {
+  const conn = track(await openSocket(url));
+  conn.ws.send(JSON.stringify({ t: "identify", token }));
+  try {
+    await waitFor(conn, (message) => message.t === "hello");
+    return conn;
+  } catch (error) {
+    conn.ws.close();
+    throw error;
+  }
+}
+
+function waitFor(conn: Conn, matches: (message: Msg) => boolean, after = 0, timeoutMs = WAIT_MS): Promise<Msg> {
+  for (const message of conn.msgs.slice(after)) {
+    if (matches(message)) return Promise.resolve(message);
+  }
+
+  const pending = Promise.withResolvers<Msg>();
+  let settled = false;
+  const cleanup = () => {
+    clearTimeout(timer);
+    conn.ws.off("message", onMessage);
+    conn.ws.off("close", onClose);
+  };
+  const onMessage = () => {
+    const message = conn.msgs.slice(after).find(matches);
+    if (!settled && message) {
+      settled = true;
+      cleanup();
+      pending.resolve(message);
+    }
+  };
+  const onClose = (code: number) => {
+    if (!settled) {
+      settled = true;
+      cleanup();
+      pending.reject(new Error(`connection closed (${code}) before expected message`));
+    }
+  };
+  const timer = setTimeout(() => {
+    if (!settled) {
+      settled = true;
+      cleanup();
+      pending.reject(new Error("timed out waiting for relay message"));
+    }
+  }, timeoutMs);
+  conn.ws.on("message", onMessage);
+  conn.ws.once("close", onClose);
+  return pending.promise;
+}
+
+function waitForClose(ws: WebSocket, timeoutMs = WAIT_MS): Promise<Closed> {
+  const pending = Promise.withResolvers<Closed>();
+  const timer = setTimeout(() => {
+    ws.off("close", onClose);
+    pending.reject(new Error("timed out waiting for websocket close"));
+  }, timeoutMs);
+  const onClose = (code: number, reason: Buffer) => {
+    clearTimeout(timer);
+    pending.resolve({ code, reason: reason.toString("utf8") });
+  };
+  ws.once("close", onClose);
+  return pending.promise;
+}
+
+async function closeConnection(conn: Conn): Promise<void> {
+  if (conn.ws.readyState === WebSocket.CLOSED) return;
+  const closed = waitForClose(conn.ws);
+  conn.ws.close();
+  await closed;
+}
+
+function send(conn: Conn, message: object): void {
+  conn.ws.send(JSON.stringify(message));
+}
+
 
 let pass = 0;
 let fail = 0;
@@ -33,67 +128,181 @@ function check(name: string, ok: boolean): void {
   console.log(ok ? `ok - ${name}` : `FAIL - ${name}`);
   if (ok) pass++; else fail++;
 }
-const send = (c: Conn, o: object) => c.ws.send(JSON.stringify(o));
-const last = (c: Conn, t: string) => [...c.msgs].reverse().find((m) => m.t === t);
-const slapsTo = (c: Conn) => c.msgs.filter((m) => m.t === "slapped").length;
 
-const a = await connect();
-const b = await connect();
-await delay(200);
-const nameA = String(a.msgs.find((m) => m.t === "hello")?.you ?? "");
-const nameB = String(b.msgs.find((m) => m.t === "hello")?.you ?? "");
-check("both get random names", nameA !== "" && nameB !== "" && nameA !== nameB);
-check("preset slaps listed", Array.isArray(a.msgs[0]?.slaps) && (a.msgs[0].slaps as unknown[]).includes("slap"));
+async function startIsolatedRelay(): Promise<{ url: string; stop: () => Promise<void> }> {
+  const dataDir = await mkdtemp(join(tmpdir(), "slap-relay-arena-"));
+  const child = Bun.spawn([process.execPath, "server.ts"], {
+    cwd: import.meta.dir,
+    env: { ...process.env, PORT: "0", DATA_DIR: dataDir },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const pending = Promise.withResolvers<string>();
+  const timer = setTimeout(() => pending.reject(new Error("isolated relay did not start")), WAIT_MS);
+  const output = child.stdout;
+  if (!output) {
+    clearTimeout(timer);
+    child.kill();
+    await rm(dataDir, { recursive: true, force: true });
+    throw new Error("isolated relay has no startup output");
+  }
+  void (async () => {
+    const reader = output.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) throw new Error("isolated relay exited before listening");
+        text += decoder.decode(value, { stream: true });
+        const port = /slap-battle relay on ws:\/\/localhost:(\d+)/.exec(text)?.[1];
+        if (port) {
+          pending.resolve(`ws://localhost:${port}`);
+          return;
+        }
+      }
+    } catch (error) {
+      pending.reject(error);
+    }
+  })();
+  try {
+    const url = await pending.promise;
+    clearTimeout(timer);
+    return {
+      url,
+      stop: async () => {
+        child.kill();
+        await child.exited;
+        await rm(dataDir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    clearTimeout(timer);
+    child.kill();
+    await child.exited;
+    await rm(dataDir, { recursive: true, force: true });
+    throw error;
+  }
+}
 
+const registryDir = await mkdtemp(join(tmpdir(), "slap-relay-registry-"));
+const durableToken = newIdentityToken();
+const registry = new IdentityStore(registryDir);
+const originalName = registry.nameFor(durableToken);
+check("same token keeps its registry name", registry.nameFor(durableToken) === originalName);
+registry.close();
+const reopenedRegistry = new IdentityStore(registryDir);
+const reopenedName = reopenedRegistry.nameFor(durableToken);
+const differentName = reopenedRegistry.nameFor(newIdentityToken());
+reopenedRegistry.close();
+await rm(registryDir, { recursive: true, force: true });
+check("name survives registry close and reopen", reopenedName === originalName);
+check("different registry credentials receive unique names", differentName !== originalName);
+
+const malformed = await openSocket(URL);
+const malformedClose = waitForClose(malformed);
+malformed.send(JSON.stringify({ t: "identify", token: "not-a-token" }));
+const malformedResult = await malformedClose;
+check("malformed identity is rejected with policy close", malformedResult.code === 1008);
+const timed = await openSocket(URL);
+const timeoutResult = await waitForClose(timed, 7_000);
+check("missing identify times out with policy close", timeoutResult.code === 1008);
+
+const tokenA = newIdentityToken();
+const tokenB = newIdentityToken();
+const a = await connect(tokenA);
+const b = await connect(tokenB);
+const nameA = String(a.msgs.find((message) => message.t === "hello")?.you ?? "");
+const nameB = String(b.msgs.find((message) => message.t === "hello")?.you ?? "");
+check("different live credentials receive distinct stable names", nameA !== "" && nameB !== "" && nameA !== nameB);
+check("hello marks the assigned name stable", a.msgs.find((message) => message.t === "hello")?.stable === true);
+check("preset slaps listed", Array.isArray(a.msgs.find((message) => message.t === "hello")?.slaps) && (a.msgs.find((message) => message.t === "hello")?.slaps as unknown[]).includes("slap"));
+
+let cursor = a.msgs.length;
 send(a, { t: "slap", to: nameB, kind: "slap" });
-await delay(200);
-check("private mode blocks slap", slapsTo(b) === 0 && last(a, "slap_miss")?.reason === "gone");
+const privateMiss = await waitFor(a, (message) => message.t === "slap_miss", cursor);
+check("private mode blocks slap", privateMiss.reason === "gone");
 
-send(a, { t: "set_mode", mode: "arena" });
-send(b, { t: "set_mode", mode: "arena" });
-await delay(300);
-send(a, { t: "shuffle" });
-await delay(300);
-const sample = last(a, "presence");
-const names = Array.isArray(sample?.names) ? (sample.names as unknown[]) : [];
-check("arena sample includes other player", names.includes(nameB));
-check("arena sample excludes self", !names.includes(nameA));
-await delay(1100);
-check("debounced arena count", last(a, "count")?.count === 2);
+const room = `test-${randomBytes(8).toString("hex")}`;
+cursor = a.msgs.length;
+send(a, { t: "set_mode", mode: "crew", room });
+await waitFor(a, (message) => message.t === "presence" && message.mode === "crew" && message.room === room, cursor);
+const beforeBJoin = a.msgs.length;
+cursor = b.msgs.length;
+send(b, { t: "set_mode", mode: "crew", room });
+const roomPresence = await waitFor(a, (message) => message.t === "presence" && Array.isArray(message.names) && message.names.includes(nameB), beforeBJoin);
+await waitFor(b, (message) => message.t === "presence" && Array.isArray(message.names) && message.names.includes(nameA), cursor);
+check("random private crew exposes only its joined peer", roomPresence.room === room);
 
+cursor = b.msgs.length;
 send(a, { t: "slap", to: nameB, kind: "bonk" });
-await delay(200);
-const hit = last(b, "slapped");
-check("arena slap delivered with sender", hit?.from === nameA && hit?.kind === "bonk");
-
-const n0 = slapsTo(b);
+const crewHit = await waitFor(b, (message) => message.t === "slapped", cursor);
+await waitFor(a, (message) => message.t === "slap_ok");
+check("crew slap is delivered with sender and kind", crewHit.from === nameA && crewHit.kind === "bonk");
+cursor = a.msgs.length;
 send(a, { t: "slap", to: nameB });
-await delay(200);
-check("per-target cooldown enforced", slapsTo(b) === n0 && last(a, "slap_miss")?.reason === "cooldown");
-
-await delay(1600);
-send(a, { t: "slap_random", kind: "splat" });
-await delay(300);
-check("random slap finds a stranger", slapsTo(b) === n0 + 1 && last(b, "slapped")?.kind === "splat");
-
+const cooldownMiss = await waitFor(a, (message) => message.t === "slap_miss", cursor);
+check("per-target cooldown enforced", cooldownMiss.reason === "cooldown");
+const cooldown = Promise.withResolvers<void>();
+setTimeout(cooldown.resolve, 1_600);
+await cooldown.promise;
+cursor = b.msgs.length;
 send(b, { t: "block", name: nameA });
-await delay(1700);
-const n1 = slapsTo(b);
+await waitFor(b, (message) => message.t === "blocked", b.msgs.length);
 send(a, { t: "slap", to: nameB });
-await delay(300);
-check("block stops slap", slapsTo(b) === n1);
+const blockedMiss = await waitFor(a, (message) => message.t === "slap_miss", a.msgs.length);
+check("block stops slap", blockedMiss.reason === "blocked");
 
-send(b, { t: "regen_name" });
-await delay(300);
-const newB = String(last(b, "presence")?.you ?? "");
-check("regen rotates name", newB !== "" && newB !== nameB);
+await closeConnection(b);
+const reconnectedB = await connect(tokenB);
+const reconnectName = String(reconnectedB.msgs.find((message) => message.t === "hello")?.you ?? "");
+check("same credential reconnect reuses its permanent name", reconnectName === nameB);
+cursor = a.msgs.length;
+send(a, { t: "slap", to: reconnectName });
+const resetModeMiss = await waitFor(a, (message) => message.t === "slap_miss", cursor);
+check("reconnected identity resets to private mode", resetModeMiss.reason === "gone");
 
-send(a, { t: "slap", to: nameB });
-await delay(300);
-check("stale name reports gone", last(a, "slap_miss")?.reason === "gone");
+const repeatedToken = newIdentityToken();
+const previous = await connect(repeatedToken);
+const repeatedName = String(previous.msgs.find((message) => message.t === "hello")?.you ?? "");
+const previousClosed = waitForClose(previous.ws);
+const replacement = await connect(repeatedToken);
+const replacementClose = await previousClosed;
+check("simultaneous duplicate identity replaces prior connection", replacementClose.code === 4409 && replacementClose.reason === "identity_in_use");
+check("replacement connection retains its identity name", replacement.msgs.find((message) => message.t === "hello")?.you === repeatedName);
 
-a.ws.close();
-b.ws.close();
-await delay(200);
+const duplicateRoom = `duplicate-${randomBytes(8).toString("hex")}`;
+cursor = replacement.msgs.length;
+send(replacement, { t: "set_mode", mode: "crew", room: duplicateRoom });
+await waitFor(replacement, (message) => message.t === "presence" && message.mode === "crew", cursor);
+const helper = await connect(newIdentityToken());
+cursor = helper.msgs.length;
+send(helper, { t: "set_mode", mode: "crew", room: duplicateRoom });
+await waitFor(helper, (message) => message.t === "presence" && Array.isArray(message.names) && message.names.includes(repeatedName), cursor);
+cursor = replacement.msgs.length;
+send(helper, { t: "slap", to: repeatedName });
+const replacementHit = await waitFor(replacement, (message) => message.t === "slapped", cursor);
+check("old connection close cannot remove replacement identity", replacementHit.from === String(helper.msgs.find((message) => message.t === "hello")?.you ?? ""));
+
+const isolated = await startIsolatedRelay();
+const arenaPeers: Conn[] = [];
+try {
+  arenaPeers.push(await connect(newIdentityToken(), isolated.url));
+  arenaPeers.push(await connect(newIdentityToken(), isolated.url));
+  for (const conn of arenaPeers) send(conn, { t: "set_mode", mode: "arena" });
+  const arenaCounts = await Promise.all(arenaPeers.map((conn) => waitFor(conn, (message) => message.t === "count" && message.count === 2)));
+  check("isolated arena count is broadcast after debounce", arenaCounts.length === 2);
+  const arenaNames = arenaPeers.map((conn) => String(conn.msgs.find((message) => message.t === "hello")?.you ?? ""));
+  cursor = arenaPeers[0]!.msgs.length;
+  send(arenaPeers[0]!, { t: "shuffle" });
+  const sample = await waitFor(arenaPeers[0]!, (message) => message.t === "presence" && message.mode === "arena", cursor);
+  const sampleNames = Array.isArray(sample.names) ? sample.names : [];
+  check("arena sample includes its other player and excludes self", sampleNames.includes(arenaNames[1]) && !sampleNames.includes(arenaNames[0]) && sampleNames.length <= 8);
+} finally {
+  await Promise.all(arenaPeers.map(closeConnection));
+  await isolated.stop();
+}
+
+await Promise.all([closeConnection(a), closeConnection(reconnectedB), closeConnection(replacement), closeConnection(helper)]);
 console.log(`\n${pass} pass, ${fail} fail`);
-process.exit(fail ? 1 : 0);
+process.exitCode = fail ? 1 : 0;

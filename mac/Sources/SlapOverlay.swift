@@ -75,23 +75,23 @@ struct SlapOverlayView: View {
   @State private var fade = false
   @State private var particles: [Particle] = []
 
-  private var tint: Color { Theme.color[kind] ?? .pink }
+  private var tint: Color { Theme.color[kind] ?? Theme.accent }
   private var hand: String { Theme.emoji[kind] ?? "👋" }
 
   var body: some View {
     ZStack {
-      RadialGradient(colors: [tint.opacity(0.55), tint.opacity(0.15), .clear], center: .center, startRadius: 0, endRadius: 900)
+      RadialGradient(colors: [tint.opacity(0.14), tint.opacity(0.04), .clear], center: .center, startRadius: 0, endRadius: 900)
         .opacity(flash)
         .ignoresSafeArea()
 
       Circle()
-        .stroke(tint, lineWidth: 22)
+        .stroke(tint.opacity(0.45), lineWidth: 8)
         .frame(width: 240, height: 240)
         .scaleEffect(ringScale)
         .opacity(ringOpacity)
 
       Circle()
-        .stroke(.white, lineWidth: 6)
+        .stroke(tint.opacity(0.25), lineWidth: 3)
         .frame(width: 240, height: 240)
         .scaleEffect(ringScale * 0.75)
         .opacity(ringOpacity * 0.8)
@@ -115,16 +115,15 @@ struct SlapOverlayView: View {
       VStack(spacing: 4) {
         HStack(spacing: 10) {
           Avatar(name: from, size: 40)
-          Text(from).font(.system(size: 30, weight: .bold, design: .rounded)).foregroundStyle(.white)
+          Text(from).font(.system(size: 30, weight: .semibold)).foregroundStyle(.secondary)
         }
         Text("\(Theme.verb[kind] ?? "SLAPPED") YOU!")
-          .font(.system(size: 72, weight: .black, design: .rounded))
-          .foregroundStyle(LinearGradient(colors: [.yellow, .orange, tint], startPoint: .leading, endPoint: .trailing))
-          .shadow(color: .black.opacity(0.45), radius: 10, y: 5)
+          .font(.system(size: 64, weight: .bold))
+          .foregroundStyle(.primary)
       }
       .padding(.horizontal, 44).padding(.vertical, 22)
-      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 34, style: .continuous).strokeBorder(.white.opacity(0.25)))
+      .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.border))
       .scaleEffect(showText ? 1 : 0.2)
       .opacity(showText ? 1 : 0)
       .offset(y: 250)

@@ -39,20 +39,12 @@ enum Mode: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var icon: String { switch self { case .solo: "🔒"; case .crew: "👥"; case .arena: "⚔️" } }
   var title: String { switch self { case .solo: "Solo"; case .crew: "Crew"; case .arena: "Arena" } }
-  var gradient: LinearGradient {
-    switch self {
-    case .solo: LinearGradient(colors: [.gray, Color(white: 0.35)], startPoint: .leading, endPoint: .trailing)
-    case .crew: LinearGradient(colors: [.teal, .blue], startPoint: .leading, endPoint: .trailing)
-    case .arena: Theme.hot
-    }
-  }
 }
 
 struct ContentView: View {
   @ObservedObject var relay: RelayClient
   @ObservedObject var fx: SlapFX
   @State private var room = ""
-  @State private var diceSpin = 0.0
   @State private var kind = "slap"
   @Namespace private var modeNS
 
@@ -60,8 +52,8 @@ struct ContentView: View {
     VStack(spacing: 14) {
       header
       HStack(spacing: 10) {
-        StatPill(icon: "👋", label: "Dealt", value: relay.sent, tint: .pink)
-        StatPill(icon: "🤕", label: "Taken", value: relay.taken, tint: .orange)
+        StatPill(icon: "👋", label: "Dealt", value: relay.sent)
+        StatPill(icon: "🤕", label: "Taken", value: relay.taken)
       }
       modePicker
       if relay.mode == Mode.crew.rawValue {
@@ -75,11 +67,17 @@ struct ContentView: View {
       }
       peers
       if !relay.feed.isEmpty { feed }
+      if let error = relay.statusError {
+        Label(error, systemImage: "exclamationmark.circle")
+          .font(.caption)
+          .foregroundStyle(Theme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       footer
     }
     .padding(16)
     .frame(width: 360)
-    .background { AnimatedBackdrop() }
+    .background(Theme.surface)
     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.mode)
     .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.lastHitFrom)
@@ -91,21 +89,17 @@ struct ContentView: View {
         .id(relay.name)
         .transition(.scale.combined(with: .opacity))
       VStack(alignment: .leading, spacing: 1) {
-        Text("You are").font(.caption2.weight(.bold)).foregroundStyle(.secondary).textCase(.uppercase)
+        Text("Your name").font(.caption2.weight(.medium)).foregroundStyle(.secondary).textCase(.uppercase)
         Text(relay.name)
-          .font(.system(.title3, design: .rounded).weight(.heavy))
+          .font(.title3.weight(.semibold))
           .contentTransition(.interpolate)
           .lineLimit(1)
       }
       Spacer()
-      Button {
-        withAnimation(.spring(response: 0.55, dampingFraction: 0.5)) { diceSpin += 360 }
-        relay.send(["t": "regen_name"])
-      } label: {
-        Text("🎲").font(.system(size: 26)).rotationEffect(.degrees(diceSpin))
-      }
-      .buttonStyle(BouncyButtonStyle())
-      .help("Roll a new random name")
+      Image(systemName: "person.crop.circle.badge.checkmark")
+        .font(.title3)
+        .foregroundStyle(.secondary)
+        .help("Your name stays with this Mac's local Keychain identity.")
     }
   }
 
@@ -116,15 +110,15 @@ struct ContentView: View {
         Button { select(m) } label: {
           HStack(spacing: 5) {
             Text(m.icon)
-            Text(m.title).font(.system(.callout, design: .rounded).weight(.bold))
+            Text(m.title).font(.callout.weight(.medium))
           }
           .padding(.vertical, 8)
           .frame(maxWidth: .infinity)
-          .foregroundStyle(selected ? Color.white : Color.primary)
+          .foregroundStyle(selected ? Color.primary : Color.secondary)
           .background {
             if selected {
-              Capsule().fill(m.gradient)
-                .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+              Capsule().fill(Theme.selection)
+                .shadow(color: .black.opacity(0.07), radius: 2, y: 1)
                 .matchedGeometryEffect(id: "pill", in: modeNS)
             }
           }
@@ -134,7 +128,7 @@ struct ContentView: View {
       }
     }
     .padding(4)
-    .background(.thinMaterial, in: Capsule())
+    .background(Theme.inset, in: Capsule())
   }
 
   private var roomBar: some View {
@@ -153,12 +147,12 @@ struct ContentView: View {
         .font(.callout.weight(.bold))
         .foregroundStyle(.white)
         .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(Mode.crew.gradient, in: Capsule())
+        .background(Theme.actionFill, in: Capsule())
         .disabled(room.isEmpty)
         .opacity(room.isEmpty ? 0.5 : 1)
     }
     .padding(.horizontal, 12).padding(.vertical, 7)
-    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .background(Theme.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
   }
 
   private func slapBack(_ who: String) -> some View {
@@ -167,16 +161,16 @@ struct ContentView: View {
     } label: {
       HStack(spacing: 8) {
         Text("↩️").font(.title3)
-        Text("Slap ").fontWeight(.bold) + Text(who).fontWeight(.black) + Text(" back!").fontWeight(.bold)
+        Text("Slap ").fontWeight(.medium) + Text(who).fontWeight(.semibold) + Text(" back!").fontWeight(.medium)
       }
-      .font(.system(.callout, design: .rounded))
+      .font(.callout)
       .lineLimit(1)
-      .foregroundStyle(.white)
+      .foregroundStyle(Theme.accent)
       .padding(.vertical, 11)
       .frame(maxWidth: .infinity)
-      .background(Theme.hot, in: Capsule())
+      .background(Theme.accent.opacity(0.08), in: Capsule())
       .phaseAnimator([false, true]) { v, p in
-        v.scaleEffect(p ? 1.03 : 1).shadow(color: .pink.opacity(p ? 0.7 : 0.2), radius: p ? 14 : 4)
+        v.scaleEffect(p ? 1.015 : 1)
       } animation: { _ in .easeInOut(duration: 0.7) }
     }
     .buttonStyle(BouncyButtonStyle())
@@ -188,15 +182,15 @@ struct ContentView: View {
       Spacer()
       ForEach(relay.kinds, id: \.self) { k in
         let selected = kind == k
-        let tint = Theme.color[k] ?? .pink
+        let tint = Theme.color[k] ?? Theme.accent
         Button {
           withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { kind = k }
         } label: {
           Text(Theme.emoji[k] ?? "👋")
             .font(.system(size: selected ? 22 : 17))
             .frame(width: 38, height: 38)
-            .background(Circle().fill(tint.opacity(selected ? 0.35 : 0.1)))
-            .overlay(Circle().strokeBorder(tint.opacity(selected ? 0.95 : 0), lineWidth: 2))
+            .background(Circle().fill(tint.opacity(selected ? 0.10 : 0.025)))
+            .overlay(Circle().strokeBorder(tint.opacity(selected ? 0.6 : 0), lineWidth: 1))
             .scaleEffect(selected ? 1.08 : 1)
         }
         .buttonStyle(BouncyButtonStyle())
@@ -221,7 +215,7 @@ struct ContentView: View {
       HStack(spacing: 10) {
         Text("🎯").font(.title2)
         VStack(alignment: .leading, spacing: 0) {
-          Text("Slap a random stranger").font(.system(.callout, design: .rounded).weight(.heavy))
+          Text("Slap a random stranger").font(.callout.weight(.semibold))
           Text("out of \(max(relay.onlineCount - 1, 0).formatted()) people")
             .font(.caption2.weight(.semibold))
             .contentTransition(.numericText(value: Double(relay.onlineCount)))
@@ -232,8 +226,7 @@ struct ContentView: View {
       }
       .foregroundStyle(.white)
       .padding(.horizontal, 14).padding(.vertical, 10)
-      .background(Theme.hot, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-      .shadow(color: .pink.opacity(0.35), radius: 10, y: 4)
+      .background(Theme.actionFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
     .disabled(!canSlap)
     .opacity(canSlap ? 1 : 0.45)
@@ -252,7 +245,7 @@ struct ContentView: View {
           .contentTransition(.numericText(value: Double(relay.onlineCount)))
         Spacer()
         if let r = relay.room, relay.mode == Mode.crew.rawValue {
-          Text("#\(r)").font(.caption.monospaced().weight(.semibold)).foregroundStyle(.teal)
+          Text("#\(r)").font(.caption.monospaced().weight(.medium)).foregroundStyle(Theme.accent)
         }
       }
       if inArena { randomSlapButton }
@@ -270,7 +263,7 @@ struct ContentView: View {
                 sectionTitle("👀 Strangers")
                 Spacer()
                 Button { relay.shuffle() } label: {
-                  Label("Shuffle", systemImage: "shuffle").font(.caption.weight(.bold)).foregroundStyle(.pink)
+                  Label("Shuffle", systemImage: "shuffle").font(.caption.weight(.medium)).foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(BouncyButtonStyle())
                 .help("Show different random people")
@@ -348,7 +341,7 @@ struct ContentView: View {
           Text(Theme.emoji[item.kind] ?? "👋").font(.caption)
           Text(item.at, style: .relative).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
         }
-        .foregroundStyle(item.incoming ? Color.orange : Color.primary)
+        .foregroundStyle(item.incoming ? Theme.accent : Color.secondary)
         .transition(.move(edge: .top).combined(with: .opacity))
       }
     }
@@ -357,16 +350,17 @@ struct ContentView: View {
   private var footer: some View {
     HStack(spacing: 10) {
       PulseDot(on: relay.connected)
-      Text(relay.connected ? "Live" : "Reconnecting…").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+      Text(relay.connected ? "Live" : relay.statusError == nil ? "Reconnecting…" : "Connection paused")
+        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
       Spacer()
       Button {
         withAnimation(.spring) { fx.panicked ? fx.unpanic() : fx.panic() }
       } label: {
         Label(fx.panicked ? "Resume" : "Panic", systemImage: fx.panicked ? "play.fill" : "hand.raised.slash.fill")
           .font(.caption.weight(.bold))
-          .foregroundStyle(.white)
+          .foregroundStyle(fx.panicked ? Theme.positive : Theme.warning)
           .padding(.horizontal, 10).padding(.vertical, 5)
-          .background(fx.panicked ? Color.green : Color.red, in: Capsule())
+          .background((fx.panicked ? Theme.positive : Theme.warning).opacity(0.10), in: Capsule())
       }
       .buttonStyle(BouncyButtonStyle())
       .help(fx.panicked ? "Re-enable slap effects" : "Silence all incoming slap effects")
