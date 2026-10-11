@@ -52,6 +52,15 @@ at `/data` on the Coolify VM as a frozen recovery copy. The new relay does not
 write to it. It covers mappings present at cutover, not names created afterward.
 Keep Neon recovery/history and database backups configured for ongoing protection.
 
+Cutover on 2026-10-11 imported all nine source identity mappings unchanged. A
+consistent additional snapshot is retained on the VM at
+`/var/lib/docker/volumes/lprjtzxw20a1qwtnx4yamduu-slap-identities/_data/identities-before-neon-20261011.sqlite`
+with owner-only permissions. This snapshot is recovery data, not an active fallback.
+An isolated Neon branch verified repeated imports, transactional rollback on
+conflicts, and 22 identity/gameplay checks. The deployed relay recovered a
+pre-migration credential's original username, and all nine Postgres mappings were
+compared exactly with the frozen source before temporary test data was removed.
+
 ### SQLite import
 
 Take a SQLite-consistent snapshot including any WAL data and pause the old writer
