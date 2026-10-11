@@ -13,24 +13,15 @@ final class AppModel: ObservableObject {
 }
 
 @main
-struct SlapBattleApp: App {
-  @StateObject private var model = AppModel()
-
-  var body: some Scene {
-    MenuBarExtra {
-      ContentView(relay: model.relay, fx: model.fx)
-    } label: {
-      MenuBarIcon(relay: model.relay)
-    }
-    .menuBarExtraStyle(.window)
-  }
-}
-
-struct MenuBarIcon: View {
-  @ObservedObject var relay: RelayClient
-  var body: some View {
-    Image(systemName: relay.taken > 0 ? "hand.raised.fill" : "hand.raised")
-      .symbolEffect(.bounce, value: relay.taken)
+enum SlapBattleApp {
+  @MainActor
+  static func main() {
+    let app = NSApplication.shared
+    let menuBar = MenuBarController()
+    app.delegate = menuBar
+    app.setActivationPolicy(.accessory)
+    app.run()
+    withExtendedLifetime(menuBar) {}
   }
 }
 

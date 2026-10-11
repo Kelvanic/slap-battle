@@ -45,6 +45,10 @@ The relay's SQLite registry lives in its `DATA_DIR`. The Docker image uses `/dat
 
 Native light/dark surfaces, desaturated avatars, and one adaptive slate accent replace neon gradients. Counters, weapon selection, and slap effects retain their motion. The panel stays clipped to its rounded edges.
 
+The menu-bar button opens an AppKit transient popover whose size follows the SwiftUI
+content. This avoids the oversized translucent top/bottom regions of the previous
+menu-window container. Opening the installed app again also opens the panel.
+
 ## Protocol
 
 - First message: `identify {token}`. No gameplay before authentication.
