@@ -14,6 +14,12 @@ cd mac && swift run
 
 Relay test: `cd relay && bun test.ts` (needs server running).
 
+## Panel
+
+Animated avatars, counters, weapon selection, and slap effects live in the menu-bar panel.
+The drifting gradient background is clipped to the rounded panel bounds so it cannot
+spill beyond the top or bottom edges.
+
 ## Protocol (relay <-> client)
 
 - `hello` — assigned name, modes, preset slap kinds

@@ -5,21 +5,10 @@ import SwiftUI
 final class AppModel: ObservableObject {
   let relay = RelayClient()
   let fx = SlapFX()
-  private var debugWindow: NSWindow?
 
   init() {
     relay.onSlapped = { [fx] from, kind in fx.fire(kind: kind, from: from) }
     relay.connect()
-    // Dev aid: SLAP_DEBUG_WINDOW=1 also shows the panel in a regular window
-    // (menu bar icons can be hidden by the notch).
-    if ProcessInfo.processInfo.environment["SLAP_DEBUG_WINDOW"] == "1" {
-      let w = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 360, height: 560),
-                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
-      w.title = "SlapBattle (debug)"
-      w.contentView = NSHostingView(rootView: ContentView(relay: relay, fx: fx))
-      w.makeKeyAndOrderFront(nil)
-      debugWindow = w
-    }
   }
 }
 
@@ -91,6 +80,7 @@ struct ContentView: View {
     .padding(16)
     .frame(width: 360)
     .background { AnimatedBackdrop() }
+    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.mode)
     .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.lastHitFrom)
   }
