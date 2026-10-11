@@ -52,9 +52,9 @@ starting with v1.1.0.
 
 Source and downloads are public at [Kelvanic/slap-battle](https://github.com/Kelvanic/slap-battle).
 Official distribution packages appear in [GitHub Releases](https://github.com/Kelvanic/slap-battle/releases).
-Notarization is required by default. The owner approved **v1.0.0 and v1.1.0 as
-Developer ID-signed but not notarized** while Apple credentials are unavailable.
-These releases have not been checked by Apple's notarization service.
+Notarization is required by default. **v1.1.0 is Developer ID-signed and notarized**;
+its DMGs and the apps in its ZIPs include stapled Apple tickets. The original
+v1.0.0 release remains Developer ID-signed but not notarized.
 
 - `CI`: pull requests, main pushes, and version tags run strict relay typechecks,
   Docker build, 22 protocol checks against an isolated TLS PostgreSQL container,
@@ -92,10 +92,17 @@ The original v1.0.0 assets do not contain update notifications or the app icon.
 Both features are included in v1.1.0. Version 1.0.0 users must download v1.1.0
 manually once; v1.1.0 can notify them about subsequent releases.
 
-### Installing the signed-only v1.0.0 or v1.1.0 release
+### Installing v1.1.0
 
 Download the package for your Mac, open the DMG, and drag SlapBattle to Applications.
-Gatekeeper may block first launch because **these releases are not notarized**. Only if you
+The v1.1.0 packages are notarized; no Open Anyway exception is required. ZIP
+alternatives contain the stapled app. Verify downloads against the current
+`SHA256SUMS`: the packages were replaced after notarization without changing
+the v1.1.0 app binaries or build number.
+
+### Installing the older signed-only v1.0.0 release
+
+Gatekeeper may block first launch because **v1.0.0 is not notarized**. Only if you
 trust the source and have verified the download, attempt to open the installed
 app, then choose System Settings → Privacy & Security → Open Anyway and confirm
 Open. This approves only Slap Battle; do not disable Gatekeeper or SIP, remove
@@ -107,8 +114,8 @@ distribution path.
 Local signed-only packaging requires explicit `SLAP_ALLOW_UNNOTARIZED=1` alongside
 the version, build number, architecture, and Developer ID signing identity. It
 does not skip code signing and must never be described as notarized. The v1.0.0
-and v1.1.0 tags are excluded from automatic packaging because they are released
-manually under this exception. All other automatic tag releases require notarization.
+and v1.1.0 tags are excluded from automatic packaging because they were published
+manually; v1.1.0 was subsequently notarized. All future automatic tag releases require notarization.
 
 ### Required GitHub configuration
 

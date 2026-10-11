@@ -6,8 +6,12 @@ The relay stores credential hashes, never raw device credentials. Production con
 
 Release signing/notarization runs only for version tags after successful CI, using the protected `release` environment. Download official packages from this repository's GitHub Releases; verify their checksums. Source builds and CI artifacts are not notarized distribution packages.
 
-Exception: the owner approved v1.0.0 and v1.1.0 as Developer ID-signed **without notarization**.
-Apple has not scanned these releases through its notarization service. Their release
-notes and installation instructions must disclose that status. If you choose to
-trust it, use Apple's app-specific Open Anyway exception; never disable Gatekeeper
-or SIP. Automatic release workflows continue to require notarization.
+v1.1.0 is Developer ID-signed and notarized. Apple accepted both architecture
+submissions without issues; DMGs and the apps in ZIPs include stapled tickets.
+The release assets and SHA256SUMS were replaced after notarization, without
+changing the app binaries or build number.
+
+Exception: the original v1.0.0 release remains Developer ID-signed **without
+notarization**. Its release notes and installation instructions disclose that
+status. If you choose to trust it, use Apple's app-specific Open Anyway exception;
+never disable Gatekeeper or SIP. Automatic release workflows require notarization.
