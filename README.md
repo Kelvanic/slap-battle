@@ -43,11 +43,21 @@ The relay's SQLite registry lives in its `DATA_DIR`. The Docker image uses `/dat
 
 ## Panel
 
-Native light/dark surfaces, desaturated avatars, and one adaptive slate accent replace neon gradients. Counters, weapon selection, and slap effects retain their motion. The panel stays clipped to its rounded edges.
+Native light/dark surfaces, desaturated avatars, and one adaptive slate accent keep
+the panel restrained. A compact identity header and mode selector lead to one
+primary action. Player rows stay lightweight; activity is collapsed by default,
+and acknowledged sent/received counts live in the footer. Pause effects stays
+immediately accessible. The bounded player list measures its content directly
+so a small list does not collapse or leave a large empty viewport.
 
 The menu-bar button opens an AppKit transient popover whose size follows the SwiftUI
 content. This avoids the oversized translucent top/bottom regions of the previous
 menu-window container. Opening the installed app again also opens the panel.
+
+Reference layouts inspected through Mobbin:
+- [Discord online friends](https://mobbin.com/screens/1bbbfcde-0540-4270-b7cb-1cfe2dd6baad) — compact avatar rows and trailing actions.
+- [Slack profile panel](https://mobbin.com/screens/85e7842e-17c6-4dca-92eb-af34f54250af) — grouped identity and status.
+- [Navattic command menu](https://mobbin.com/screens/c65971cf-c4ea-45e9-99a5-555930cb5d73) — quiet section grouping and secondary chrome.
 
 ## Protocol
 

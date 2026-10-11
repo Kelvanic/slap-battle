@@ -28,7 +28,7 @@ enum SlapBattleApp {
 enum Mode: String, CaseIterable, Identifiable {
   case solo = "private", crew, arena
   var id: String { rawValue }
-  var icon: String { switch self { case .solo: "🔒"; case .crew: "👥"; case .arena: "⚔️" } }
+  var icon: String { switch self { case .solo: "lock"; case .crew: "person.2"; case .arena: "hand.raised" } }
   var title: String { switch self { case .solo: "Solo"; case .crew: "Crew"; case .arena: "Arena" } }
 }
 
@@ -37,344 +37,365 @@ struct ContentView: View {
   @ObservedObject var fx: SlapFX
   @State private var room = ""
   @State private var kind = "slap"
+  @State private var showActivity = false
+  @State private var peerListHeight: CGFloat = 210
   @Namespace private var modeNS
 
   var body: some View {
-    VStack(spacing: 14) {
-      header
-      HStack(spacing: 10) {
-        StatPill(icon: "👋", label: "Dealt", value: relay.sent)
-        StatPill(icon: "🤕", label: "Taken", value: relay.taken)
-      }
+    VStack(alignment: .leading, spacing: 14) {
+      toolbar
+      identity
       modePicker
-      if relay.mode == Mode.crew.rawValue {
-        roomBar.transition(.move(edge: .top).combined(with: .opacity))
+      if relay.mode == Mode.solo.rawValue {
+        quietState
+      } else {
+        playArea
       }
-      if relay.mode != Mode.solo.rawValue {
-        weaponPicker.transition(.move(edge: .top).combined(with: .opacity))
+      if fx.panicked {
+        Label("Effects paused. You can still send slaps.", systemImage: "pause.circle")
+          .font(.caption).foregroundStyle(Theme.warning)
       }
-      if let h = relay.lastHitFrom, relay.mode != Mode.solo.rawValue {
-        slapBack(h).transition(.scale(scale: 0.8).combined(with: .opacity))
-      }
-      peers
-      if !relay.feed.isEmpty { feed }
       if let error = relay.statusError {
         Label(error, systemImage: "exclamationmark.circle")
-          .font(.caption)
-          .foregroundStyle(Theme.warning)
+          .font(.caption).foregroundStyle(Theme.warning)
           .fixedSize(horizontal: false, vertical: true)
       }
+      if !relay.feed.isEmpty { activity }
+      Divider().opacity(0.55)
       footer
     }
-    .padding(16)
+    .padding(18)
     .frame(width: 360)
     .background(Theme.surface)
     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.mode)
-    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: relay.lastHitFrom)
+    .animation(.easeInOut(duration: 0.2), value: relay.mode)
+    .animation(.easeInOut(duration: 0.2), value: showActivity)
+    .onChange(of: relay.onlineCount) { _, count in
+      if relay.mode == Mode.arena.rawValue && count > 1 && relay.peers.isEmpty {
+        relay.shuffle()
+      }
+    }
   }
 
-  private var header: some View {
-    HStack(spacing: 12) {
-      Avatar(name: relay.name, size: 46)
-        .id(relay.name)
-        .transition(.scale.combined(with: .opacity))
-      VStack(alignment: .leading, spacing: 1) {
-        Text("Your name").font(.caption2.weight(.medium)).foregroundStyle(.secondary).textCase(.uppercase)
-        Text(relay.name)
-          .font(.title3.weight(.semibold))
-          .contentTransition(.interpolate)
-          .lineLimit(1)
-      }
+  private var toolbar: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "hand.raised.fill").foregroundStyle(Theme.accent)
+      Text("Slap Battle").font(.system(size: 14, weight: .semibold))
       Spacer()
-      Image(systemName: "person.crop.circle.badge.checkmark")
-        .font(.title3)
-        .foregroundStyle(.secondary)
-        .help("Your name stays with this Mac's local Keychain identity.")
+      PulseDot(on: relay.connected)
+      Text(relay.connected ? "Live" : relay.statusError == nil ? "Connecting" : "Paused")
+        .font(.system(size: 11)).foregroundStyle(.secondary)
+      Menu {
+        Button(fx.panicked ? "Resume effects" : "Pause effects") { toggleEffects() }
+        Divider()
+        Button("Quit Slap Battle") { NSApp.terminate(nil) }
+      } label: {
+        Image(systemName: "ellipsis").frame(width: 20, height: 20)
+      }
+      .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+      .accessibilityLabel("App options")
     }
+  }
+
+  private var identity: some View {
+    HStack(spacing: 10) {
+      Avatar(name: relay.name, size: 34)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(relay.name).font(.system(size: 13, weight: .semibold))
+          .lineLimit(1).minimumScaleFactor(0.85)
+        Label("Your name, for keeps", systemImage: "checkmark.shield")
+          .font(.system(size: 11)).foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .help("Your name is linked to this Mac's local Keychain identity.")
   }
 
   private var modePicker: some View {
-    HStack(spacing: 4) {
-      ForEach(Mode.allCases) { m in
-        let selected = relay.mode == m.rawValue
-        Button { select(m) } label: {
-          HStack(spacing: 5) {
-            Text(m.icon)
-            Text(m.title).font(.callout.weight(.medium))
-          }
-          .padding(.vertical, 8)
-          .frame(maxWidth: .infinity)
-          .foregroundStyle(selected ? Color.primary : Color.secondary)
-          .background {
-            if selected {
-              Capsule().fill(Theme.selection)
-                .shadow(color: .black.opacity(0.07), radius: 2, y: 1)
-                .matchedGeometryEffect(id: "pill", in: modeNS)
+    HStack(spacing: 3) {
+      ForEach(Mode.allCases) { mode in
+        let selected = relay.mode == mode.rawValue
+        Button { select(mode) } label: {
+          Label(mode.title, systemImage: mode.icon)
+            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+            .frame(maxWidth: .infinity).padding(.vertical, 7)
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .background {
+              if selected {
+                RoundedRectangle(cornerRadius: 6).fill(Theme.selection)
+                  .shadow(color: .black.opacity(0.06), radius: 1, y: 1)
+                  .matchedGeometryEffect(id: "mode", in: modeNS)
+              }
             }
-          }
-          .contentShape(Capsule())
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(mode.title) mode")
       }
     }
-    .padding(4)
-    .background(Theme.inset, in: Capsule())
+    .padding(3).background(Theme.inset, in: RoundedRectangle(cornerRadius: 8))
+    .disabled(!relay.connected)
+  }
+
+  private var quietState: some View {
+    VStack(spacing: 10) {
+      Image(systemName: "hand.raised")
+        .font(.system(size: 25, weight: .light)).foregroundStyle(Theme.accent)
+        .frame(width: 48, height: 48)
+        .background(Theme.accent.opacity(0.06), in: Circle())
+        .padding(.top, 4)
+      Text("A little friendly chaos.").font(.system(size: 16, weight: .semibold))
+      Text("You're in Solo. Join the arena to trade slaps,\nor play with friends in a crew.")
+        .font(.system(size: 12)).foregroundStyle(.secondary)
+        .multilineTextAlignment(.center).lineSpacing(3)
+      Button { select(.arena) } label: {
+        Label("Enter the arena", systemImage: "arrow.right")
+          .font(.system(size: 13, weight: .semibold))
+          .frame(maxWidth: .infinity).padding(.vertical, 10)
+          .foregroundStyle(.white)
+          .background(Theme.actionFill, in: RoundedRectangle(cornerRadius: 8))
+      }
+      .buttonStyle(BouncyButtonStyle()).disabled(!relay.connected)
+      .padding(.top, 6)
+      Text("Nobody can slap you until you join.")
+        .font(.system(size: 10)).foregroundStyle(.tertiary)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var playArea: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      if relay.mode == Mode.crew.rawValue { roomBar }
+      HStack {
+        Text("Pick your move").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+        Spacer()
+        HStack(spacing: 5) {
+          Circle().fill(Theme.positive).frame(width: 4, height: 4)
+          Text("\(relay.onlineCount.formatted()) online")
+            .font(.system(size: 11)).foregroundStyle(.secondary)
+            .contentTransition(.numericText(value: Double(relay.onlineCount)))
+        }
+      }
+      movePicker
+      if relay.mode == Mode.arena.rawValue {
+        Button {
+          NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+          relay.slapRandom(kind)
+        } label: {
+          HStack(spacing: 8) {
+            Text(Theme.emoji[kind] ?? "👋").font(.system(size: 17))
+            Text("Slap a stranger").font(.system(size: 13, weight: .semibold))
+            Spacer()
+            Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .medium))
+          }
+          .padding(.horizontal, 12).padding(.vertical, 11)
+          .foregroundStyle(.white)
+          .background(Theme.actionFill, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(BouncyButtonStyle()).disabled(!relay.connected || relay.onlineCount < 2)
+        .opacity(relay.onlineCount < 2 ? 0.55 : 1)
+        .symbolEffect(.bounce, value: relay.sent)
+      }
+      if let opponent = relay.lastHitFrom,
+         (relay.mode == Mode.arena.rawValue ? relay.rivals : relay.peers).contains(opponent) {
+        Button { relay.send(["t": "slap", "to": opponent, "kind": kind]) } label: {
+          Label("Slap \(opponent) back", systemImage: "arrow.uturn.backward")
+            .font(.system(size: 11)).foregroundStyle(Theme.accent).lineLimit(1)
+        }
+        .buttonStyle(.plain).disabled(!relay.connected)
+      }
+      opponentList
+    }
+  }
+
+  private var movePicker: some View {
+    HStack(spacing: 6) {
+      ForEach(relay.kinds, id: \.self) { move in
+        let selected = move == kind
+        Button { withAnimation(.easeInOut(duration: 0.15)) { kind = move } } label: {
+          VStack(spacing: 4) {
+            Text(Theme.emoji[move] ?? "👋").font(.system(size: 21))
+            Text(move.capitalized).font(.system(size: 10, weight: selected ? .semibold : .regular))
+          }
+          .frame(maxWidth: .infinity).padding(.vertical, 8)
+          .foregroundStyle(selected ? Color.primary : Color.secondary)
+          .background(selected ? Theme.selection : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+          .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Theme.border : .clear))
+          .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(BouncyButtonStyle()).accessibilityLabel("\(move.capitalized) move")
+      }
+    }
+    .padding(3).background(Theme.inset, in: RoundedRectangle(cornerRadius: 10))
   }
 
   private var roomBar: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "number").foregroundStyle(.secondary)
-      TextField(relay.room ?? "room-code", text: $room)
-        .textFieldStyle(.plain)
-        .font(.system(.callout, design: .monospaced))
-        .onSubmit { joinRoom() }
-        .onChange(of: room) { _, new in
-          let f = String(new.lowercased().filter { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }.prefix(32))
-          if f != new { room = f }
-        }
-      Button("Join", action: joinRoom)
-        .buttonStyle(.plain)
-        .font(.callout.weight(.bold))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12).padding(.vertical, 5)
-        .background(Theme.actionFill, in: Capsule())
-        .disabled(room.isEmpty)
-        .opacity(room.isEmpty ? 0.5 : 1)
-    }
-    .padding(.horizontal, 12).padding(.vertical, 7)
-    .background(Theme.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-  }
-
-  private func slapBack(_ who: String) -> some View {
-    Button {
-      relay.send(["t": "slap", "to": who, "kind": kind])
-    } label: {
-      HStack(spacing: 8) {
-        Text("↩️").font(.title3)
-        Text("Slap ").fontWeight(.medium) + Text(who).fontWeight(.semibold) + Text(" back!").fontWeight(.medium)
-      }
-      .font(.callout)
-      .lineLimit(1)
-      .foregroundStyle(Theme.accent)
-      .padding(.vertical, 11)
-      .frame(maxWidth: .infinity)
-      .background(Theme.accent.opacity(0.08), in: Capsule())
-      .phaseAnimator([false, true]) { v, p in
-        v.scaleEffect(p ? 1.015 : 1)
-      } animation: { _ in .easeInOut(duration: 0.7) }
-    }
-    .buttonStyle(BouncyButtonStyle())
-  }
-
-  private var weaponPicker: some View {
-    HStack(spacing: 8) {
-      Text("Weapon").font(.caption.weight(.bold)).foregroundStyle(.secondary)
-      Spacer()
-      ForEach(relay.kinds, id: \.self) { k in
-        let selected = kind == k
-        let tint = Theme.color[k] ?? Theme.accent
-        Button {
-          withAnimation(.spring(response: 0.3, dampingFraction: 0.55)) { kind = k }
-        } label: {
-          Text(Theme.emoji[k] ?? "👋")
-            .font(.system(size: selected ? 22 : 17))
-            .frame(width: 38, height: 38)
-            .background(Circle().fill(tint.opacity(selected ? 0.10 : 0.025)))
-            .overlay(Circle().strokeBorder(tint.opacity(selected ? 0.6 : 0), lineWidth: 1))
-            .scaleEffect(selected ? 1.08 : 1)
-        }
-        .buttonStyle(BouncyButtonStyle())
-        .help(k.capitalized)
-      }
-    }
-  }
-
-  private var countLabel: String {
-    switch relay.mode {
-    case Mode.arena.rawValue: "\(relay.onlineCount.formatted()) in the arena"
-    case Mode.crew.rawValue: "\(relay.onlineCount.formatted()) in the crew"
-    default: "Offline to everyone"
-    }
-  }
-
-  private var randomSlapButton: some View {
-    let canSlap = relay.onlineCount > 1
-    return PopButton(emoji: Theme.emoji[kind] ?? "👋") {
-      relay.slapRandom(kind)
-    } label: {
-      HStack(spacing: 10) {
-        Text("🎯").font(.title2)
-        VStack(alignment: .leading, spacing: 0) {
-          Text("Slap a random stranger").font(.callout.weight(.semibold))
-          Text("out of \(max(relay.onlineCount - 1, 0).formatted()) people")
-            .font(.caption2.weight(.semibold))
-            .contentTransition(.numericText(value: Double(relay.onlineCount)))
-            .opacity(0.85)
-        }
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Text("Crew room").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
         Spacer()
-        Text(Theme.emoji[kind] ?? "👋").font(.title2)
+        if let code = relay.room {
+          Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+          } label: {
+            Label("Copy code", systemImage: "doc.on.doc").font(.system(size: 10))
+          }
+          .buttonStyle(.plain).foregroundStyle(Theme.accent)
+        }
       }
-      .foregroundStyle(.white)
-      .padding(.horizontal, 14).padding(.vertical, 10)
-      .background(Theme.actionFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      HStack(spacing: 8) {
+        TextField(relay.room ?? "Room code", text: $room)
+          .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced))
+          .onSubmit { joinRoom() }
+          .onChange(of: room) { _, value in
+            let filtered = String(value.lowercased().filter {
+              ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-"
+            }.prefix(32))
+            if filtered != value { room = filtered }
+          }
+        Button("Join", action: joinRoom).buttonStyle(.plain)
+          .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+          .disabled(room.isEmpty || !relay.connected)
+      }
+      .padding(10).background(Theme.inset, in: RoundedRectangle(cornerRadius: 8))
     }
-    .disabled(!canSlap)
-    .opacity(canSlap ? 1 : 0.45)
   }
 
-  private var peers: some View {
+  private var opponentList: some View {
     let inArena = relay.mode == Mode.arena.rawValue
     let rivals = inArena ? relay.rivals : []
     let strangers = relay.peers.filter { !rivals.contains($0) }
-    return VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 6) {
-        PulseDot(on: relay.onlineCount > 1)
-        Text(countLabel)
-          .font(.caption.weight(.bold))
-          .foregroundStyle(.secondary)
-          .contentTransition(.numericText(value: Double(relay.onlineCount)))
-        Spacer()
-        if let r = relay.room, relay.mode == Mode.crew.rawValue {
-          Text("#\(r)").font(.caption.monospaced().weight(.medium)).foregroundStyle(Theme.accent)
-        }
-      }
-      if inArena { randomSlapButton }
+    return VStack(alignment: .leading, spacing: 8) {
       if rivals.isEmpty && strangers.isEmpty {
-        emptyState
+        HStack(alignment: .top, spacing: 8) {
+          Image(systemName: inArena ? "person.badge.clock" : "person.2").foregroundStyle(.tertiary)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(inArena ? (relay.onlineCount > 1 ? "Find your next opponent" : "No opponents yet") : "Waiting for your crew")
+              .font(.system(size: 12, weight: .medium))
+            Text(inArena
+                 ? (relay.onlineCount > 1 ? "Shuffle the list, or send a random slap." : "Someone else needs to join before you can slap.")
+                 : "Share the room code to bring your friends in.")
+              .font(.system(size: 11)).foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            if inArena && relay.onlineCount > 1 {
+              Button("Find opponents", systemImage: "shuffle") { relay.shuffle() }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+            }
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
       } else {
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 6) {
+          VStack(alignment: .leading, spacing: 3) {
             if !rivals.isEmpty {
-              sectionTitle("🔥 Rivals")
-              ForEach(rivals, id: \.self) { row($0, rival: true) }
+              sectionTitle("Recent rivals")
+              ForEach(rivals, id: \.self) { row($0) }
             }
-            if inArena && !strangers.isEmpty {
+            if !strangers.isEmpty {
               HStack {
-                sectionTitle("👀 Strangers")
+                sectionTitle(inArena ? "Around you" : "Your crew")
                 Spacer()
-                Button { relay.shuffle() } label: {
-                  Label("Shuffle", systemImage: "shuffle").font(.caption.weight(.medium)).foregroundStyle(Theme.accent)
+                if inArena {
+                  Button { relay.shuffle() } label: {
+                    Image(systemName: "shuffle").font(.system(size: 11)).foregroundStyle(.secondary)
+                  }
+                  .buttonStyle(.plain).help("Find different opponents")
+                  .accessibilityLabel("Shuffle opponents")
                 }
-                .buttonStyle(BouncyButtonStyle())
-                .help("Show different random people")
               }
+              ForEach(strangers, id: \.self) { row($0) }
             }
-            ForEach(strangers, id: \.self) { row($0, rival: false) }
           }
-          .padding(.vertical, 2)
+          .onGeometryChange(for: CGFloat.self) { geometry in
+            geometry.size.height
+          } action: { height in
+            Task { @MainActor in peerListHeight = max(1, ceil(height)) }
+          }
         }
-        .frame(maxHeight: 260)
+        .frame(height: min(peerListHeight, 210))
       }
     }
   }
 
-  private func sectionTitle(_ s: String) -> some View {
-    Text(s).font(.caption.weight(.bold)).foregroundStyle(.secondary).padding(.top, 2)
+  private func sectionTitle(_ title: String) -> some View {
+    Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+      .padding(.top, 6).padding(.bottom, 4)
   }
 
-  private func row(_ peer: String, rival: Bool) -> some View {
-    PeerRow(
-      name: peer,
-      kind: kind,
-      rival: rival,
-      onSlap: { relay.send(["t": "slap", "to": peer, "kind": kind]) },
+  private func row(_ name: String) -> some View {
+    PeerRow(name: name, kind: kind,
+      onSlap: { relay.send(["t": "slap", "to": name, "kind": kind]) },
       onBlock: {
-        relay.send(["t": "block", "name": peer])
-        withAnimation(.spring) {
-          relay.peers.removeAll { $0 == peer }
-          relay.rivals.removeAll { $0 == peer }
+        relay.send(["t": "block", "name": name])
+        withAnimation(.easeInOut(duration: 0.2)) {
+          relay.peers.removeAll { $0 == name }
+          relay.rivals.removeAll { $0 == name }
+          if relay.lastHitFrom == name { relay.lastHitFrom = nil }
         }
       },
-      onReport: { relay.send(["t": "report", "name": peer]) })
-    .transition(.asymmetric(
-      insertion: .move(edge: .trailing).combined(with: .opacity),
-      removal: .scale(scale: 0.6).combined(with: .opacity)))
+      onReport: { relay.send(["t": "report", "name": name]) })
+      .disabled(!relay.connected)
   }
 
-  private var emptyState: some View {
-    let (icon, text): (String, String) = switch relay.mode {
-    case Mode.solo.rawValue: ("😇", "Solo mode — nobody can slap you.")
-    case Mode.crew.rawValue: ("📡", "Waiting for your crew… share the room code.")
-    default: relay.onlineCount > 1
-      ? ("🎲", "Hit 🎯 above, or shuffle to see strangers.")
-      : ("🥊", "Arena's empty. Be the first to throw hands.")
-    }
-    return VStack(spacing: 6) {
-      Text(icon).font(.system(size: 38))
-        .phaseAnimator([0.0, -6.0]) { v, y in v.offset(y: y) } animation: { _ in .easeInOut(duration: 0.8) }
-      Text(text).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-      if relay.mode == Mode.arena.rawValue && relay.onlineCount > 1 {
-        Button("🔀 Shuffle") { relay.shuffle() }.buttonStyle(BouncyButtonStyle()).font(.callout.weight(.bold))
-      }
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.vertical, 18)
-    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-  }
-
-  private var feed: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Recent").font(.caption.weight(.bold)).foregroundStyle(.secondary)
-      ForEach(relay.feed) { item in
-        HStack(spacing: 8) {
-          Avatar(name: item.who, size: 20)
-          Group {
-            if item.incoming {
-              Text(item.who).fontWeight(.bold) + Text(" \((Theme.verb[item.kind] ?? "slapped").lowercased()) you")
-            } else {
-              Text("You \((Theme.verb[item.kind] ?? "slapped").lowercased()) ") + Text(item.who).fontWeight(.bold)
-            }
+  private var activity: some View {
+    DisclosureGroup(isExpanded: $showActivity) {
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(relay.feed) { item in
+          HStack(spacing: 7) {
+            Text(Theme.emoji[item.kind] ?? "👋").font(.system(size: 12))
+            Text(item.incoming
+                 ? "\(item.who) \((Theme.verb[item.kind] ?? "SLAPPED").lowercased()) you"
+                 : "You \((Theme.verb[item.kind] ?? "SLAPPED").lowercased()) \(item.who)")
+              .font(.system(size: 11)).lineLimit(1)
+            Spacer(minLength: 0)
+            Text(item.at, style: .relative).font(.system(size: 10)).foregroundStyle(.tertiary)
           }
-          .font(.caption)
-          .lineLimit(1)
-          Spacer(minLength: 4)
-          Text(Theme.emoji[item.kind] ?? "👋").font(.caption)
-          Text(item.at, style: .relative).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
         }
-        .foregroundStyle(item.incoming ? Theme.accent : Color.secondary)
-        .transition(.move(edge: .top).combined(with: .opacity))
       }
+      .padding(.top, 8)
+    } label: {
+      Text("Recent activity").font(.system(size: 11)).foregroundStyle(.secondary)
     }
+    .tint(Theme.accent)
   }
 
   private var footer: some View {
-    HStack(spacing: 10) {
-      PulseDot(on: relay.connected)
-      Text(relay.connected ? "Live" : relay.statusError == nil ? "Reconnecting…" : "Connection paused")
-        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+    HStack(spacing: 6) {
+      Text("\(relay.sent) sent").contentTransition(.numericText(value: Double(relay.sent)))
+      Text("·").foregroundStyle(.tertiary)
+      Text("\(relay.taken) received").contentTransition(.numericText(value: Double(relay.taken)))
       Spacer()
-      Button {
-        withAnimation(.spring) { fx.panicked ? fx.unpanic() : fx.panic() }
-      } label: {
-        Label(fx.panicked ? "Resume" : "Panic", systemImage: fx.panicked ? "play.fill" : "hand.raised.slash.fill")
-          .font(.caption.weight(.bold))
-          .foregroundStyle(fx.panicked ? Theme.positive : Theme.warning)
-          .padding(.horizontal, 10).padding(.vertical, 5)
-          .background((fx.panicked ? Theme.positive : Theme.warning).opacity(0.10), in: Capsule())
+      Button(action: toggleEffects) {
+        Label(fx.panicked ? "Resume" : "Pause effects", systemImage: fx.panicked ? "play" : "pause")
       }
-      .buttonStyle(BouncyButtonStyle())
-      .help(fx.panicked ? "Re-enable slap effects" : "Silence all incoming slap effects")
-      Button { NSApp.terminate(nil) } label: {
-        Image(systemName: "power").font(.caption.weight(.bold)).foregroundStyle(.secondary)
-      }
-      .buttonStyle(BouncyButtonStyle())
-      .help("Quit")
+      .buttonStyle(.plain).foregroundStyle(fx.panicked ? Theme.warning : Color.secondary)
+      .help("Immediately pause or resume incoming sound and animation effects.")
+    }
+    .font(.system(size: 10)).foregroundStyle(.secondary)
+    .animation(.easeOut(duration: 0.2), value: relay.sent)
+    .animation(.easeOut(duration: 0.2), value: relay.taken)
+  }
+
+  private func toggleEffects() {
+    withAnimation(.easeInOut(duration: 0.2)) {
+      if fx.panicked { fx.unpanic() } else { fx.panic() }
     }
   }
 
-  private func select(_ m: Mode) {
-    guard relay.mode != m.rawValue else { return }
-    relay.mode = m.rawValue
-    if m == .crew {
+  private func select(_ mode: Mode) {
+    guard relay.mode != mode.rawValue, relay.connected else { return }
+    relay.mode = mode.rawValue
+    if mode == .crew {
       relay.send(["t": "set_mode", "mode": "crew", "room": room.isEmpty ? "lobby" : room])
     } else {
-      relay.send(["t": "set_mode", "mode": m.rawValue])
+      relay.send(["t": "set_mode", "mode": mode.rawValue])
     }
   }
 
   private func joinRoom() {
-    guard !room.isEmpty else { return }
+    guard !room.isEmpty, relay.connected else { return }
     relay.send(["t": "set_mode", "mode": "crew", "room": room])
   }
 }

@@ -71,120 +71,44 @@ struct PulseDot: View {
   }
 }
 
-struct StatPill: View {
-  let icon: String
-  let label: String
-  let value: Int
-
-  var body: some View {
-    HStack(spacing: 8) {
-      Text(icon).font(.title3)
-      VStack(alignment: .leading, spacing: 0) {
-        Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
-        Text("\(value)")
-          .font(.system(.title3).weight(.semibold))
-          .contentTransition(.numericText(value: Double(value)))
-          .foregroundStyle(.primary)
-      }
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, 12).padding(.vertical, 8)
-    .frame(maxWidth: .infinity)
-    .background(Theme.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: value)
-  }
-}
-
-struct FloatingPop: View {
-  let emoji: String
-  @State private var go = false
-
-  var body: some View {
-    Text("+1 \(emoji)")
-      .font(.headline.weight(.semibold))
-      .foregroundStyle(Theme.accent)
-      .offset(y: go ? -48 : 0)
-      .scaleEffect(go ? 1.3 : 0.6)
-      .opacity(go ? 0 : 1)
-      .onAppear { withAnimation(.easeOut(duration: 0.85)) { go = true } }
-      .allowsHitTesting(false)
-  }
-}
-
-/// Button that floats "+1 <emoji>" on every press, with a trackpad haptic tick.
-struct PopButton<Label: View>: View {
-  let emoji: String
-  let action: () -> Void
-  @ViewBuilder let label: () -> Label
-
-  private struct Pop: Identifiable { let id = UUID() }
-  @State private var pops: [Pop] = []
-
-  var body: some View {
-    Button {
-      let p = Pop()
-      pops.append(p)
-      NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-      action()
-      Task { try? await Task.sleep(for: .milliseconds(900)); pops.removeAll { $0.id == p.id } }
-    } label: {
-      label()
-    }
-    .buttonStyle(BouncyButtonStyle())
-    .overlay { ZStack { ForEach(pops) { _ in FloatingPop(emoji: emoji) } } }
-  }
-}
 
 struct PeerRow: View {
   let name: String
   let kind: String
-  var rival = false
   let onSlap: () -> Void
   let onBlock: () -> Void
   let onReport: () -> Void
-
   @State private var hover = false
 
   var body: some View {
-    let tint = Theme.color[kind] ?? Theme.accent
-    let emoji = Theme.emoji[kind] ?? "👋"
-    HStack(spacing: 10) {
-      Avatar(name: name, size: 30)
-      VStack(alignment: .leading, spacing: 0) {
-        Text(name).font(.callout.weight(.medium)).lineLimit(1)
-        if rival {
-          Text("rival").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
-        }
-      }
+    HStack(spacing: 9) {
+      Avatar(name: name, size: 26)
+      Text(name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+        .minimumScaleFactor(0.9)
       Spacer(minLength: 4)
-      PopButton(emoji: emoji, action: onSlap) {
-        HStack(spacing: 4) {
-          Text(emoji)
-          Text("Slap").fontWeight(.semibold)
-        }
-        .font(.callout)
-        .foregroundStyle(tint)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(tint.opacity(hover ? 0.14 : 0.08), in: Capsule())
+      Button {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        onSlap()
+      } label: {
+        Text(Theme.emoji[kind] ?? "👋").font(.system(size: 16))
+          .frame(width: 28, height: 28)
+          .background(Theme.accent.opacity(hover ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 6))
       }
+      .buttonStyle(BouncyButtonStyle())
       .help("\(kind.capitalized) \(name)")
+      .accessibilityLabel("\(kind.capitalized) \(name)")
       Menu {
         Button("Block \(name)", role: .destructive, action: onBlock)
         Button("Report \(name)", action: onReport)
       } label: {
-        Image(systemName: "ellipsis").foregroundStyle(.secondary)
+        Image(systemName: "ellipsis").font(.system(size: 11)).foregroundStyle(.secondary)
       }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .frame(width: 18)
+      .menuStyle(.borderlessButton).menuIndicator(.hidden)
+      .frame(width: 16)
+      .accessibilityLabel("Options for \(name)")
     }
-    .padding(.horizontal, 10).padding(.vertical, 7)
-    .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(Color.primary.opacity(hover ? 0.055 : 0.025))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border))
-    )
-    .scaleEffect(hover ? 1.015 : 1)
-    .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }
+    .padding(.horizontal, 6).padding(.vertical, 6)
+    .background(hover ? Theme.inset : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+    .onHover { value in withAnimation(.easeOut(duration: 0.15)) { hover = value } }
   }
 }
