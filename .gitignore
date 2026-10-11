@@ -4,6 +4,9 @@ node_modules/
 *.xcodeproj/
 .DS_Store
 .env
+.env.*
+!.env.example
+.neon
 relay/data/
 *.sqlite
 *.sqlite-wal

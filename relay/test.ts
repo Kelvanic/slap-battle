@@ -1,12 +1,15 @@
-import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { Pool } from "pg";
 import { WebSocket, type RawData } from "ws";
 import { z } from "zod";
 import { IdentityStore, newIdentityToken } from "./identity-store";
 
-const URL = process.env.RELAY_URL ?? "ws://localhost:8787";
+let URL = "";
+const DATABASE_URL = z.string().min(1).parse(process.env.DATABASE_URL);
+const testTokenHashes = new Set<string>();
+function trackTestToken(token: string): void {
+  testTokenHashes.add(createHash("sha256").update(token, "utf8").digest("hex"));
+}
 const WAIT_MS = 10_000;
 const MessageSchema = z.object({ t: z.string() }).passthrough();
 type Msg = z.infer<typeof MessageSchema>;
@@ -47,6 +50,7 @@ function track(ws: WebSocket): Conn {
 
 async function connect(token: string, url = URL): Promise<Conn> {
   const conn = track(await openSocket(url));
+  trackTestToken(token);
   conn.ws.send(JSON.stringify({ t: "identify", token }));
   try {
     await waitFor(conn, (message) => message.t === "hello");
@@ -130,10 +134,9 @@ function check(name: string, ok: boolean): void {
 }
 
 async function startIsolatedRelay(): Promise<{ url: string; stop: () => Promise<void> }> {
-  const dataDir = await mkdtemp(join(tmpdir(), "slap-relay-arena-"));
   const child = Bun.spawn([process.execPath, "server.ts"], {
     cwd: import.meta.dir,
-    env: { ...process.env, PORT: "0", DATA_DIR: dataDir },
+    env: { ...process.env, PORT: "0" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -143,7 +146,7 @@ async function startIsolatedRelay(): Promise<{ url: string; stop: () => Promise<
   if (!output) {
     clearTimeout(timer);
     child.kill();
-    await rm(dataDir, { recursive: true, force: true });
+    await child.exited;
     throw new Error("isolated relay has no startup output");
   }
   void (async () => {
@@ -173,31 +176,70 @@ async function startIsolatedRelay(): Promise<{ url: string; stop: () => Promise<
       stop: async () => {
         child.kill();
         await child.exited;
-        await rm(dataDir, { recursive: true, force: true });
       },
     };
   } catch (error) {
     clearTimeout(timer);
     child.kill();
     await child.exited;
-    await rm(dataDir, { recursive: true, force: true });
     throw error;
   }
 }
 
-const registryDir = await mkdtemp(join(tmpdir(), "slap-relay-registry-"));
+async function cleanupTestIdentities(): Promise<void> {
+  const connectionUrl = new globalThis.URL(DATABASE_URL);
+  for (const key of ["sslmode", "sslrootcert", "sslcert", "sslkey", "sslpassword"]) {
+    connectionUrl.searchParams.delete(key);
+  }
+  const pool = new Pool({
+    connectionString: connectionUrl.toString(),
+    ssl: { rejectUnauthorized: true },
+  });
+  try {
+    if (testTokenHashes.size > 0) {
+      await pool.query(
+        "DELETE FROM slap_battle.identities WHERE token_hash = ANY($1::text[])",
+        [[...testTokenHashes]],
+      );
+    }
+  } finally {
+    await pool.end();
+  }
+}
+async function runTests(): Promise<void> {
+  const primaryRelay = await startIsolatedRelay();
+  URL = primaryRelay.url;
+  try {
+
 const durableToken = newIdentityToken();
-const registry = new IdentityStore(registryDir);
-const originalName = registry.nameFor(durableToken);
-check("same token keeps its registry name", registry.nameFor(durableToken) === originalName);
-registry.close();
-const reopenedRegistry = new IdentityStore(registryDir);
-const reopenedName = reopenedRegistry.nameFor(durableToken);
-const differentName = reopenedRegistry.nameFor(newIdentityToken());
-reopenedRegistry.close();
-await rm(registryDir, { recursive: true, force: true });
-check("name survives registry close and reopen", reopenedName === originalName);
-check("different registry credentials receive unique names", differentName !== originalName);
+trackTestToken(durableToken);
+const registry = await IdentityStore.open(DATABASE_URL);
+const originalName = await registry.nameFor(durableToken);
+const concurrentToken = newIdentityToken();
+trackTestToken(concurrentToken);
+const concurrentNames = await Promise.all(Array.from({ length: 8 }, () => registry.nameFor(concurrentToken)));
+const concurrentName = concurrentNames[0] ?? "";
+const differentToken = newIdentityToken();
+trackTestToken(differentToken);
+const differentName = await registry.nameFor(differentToken);
+await registry.close();
+check("same-token concurrent claims resolve to one name", concurrentName !== "" && concurrentNames.every((name) => name === concurrentName));
+check("different credentials receive unique names", differentName !== originalName);
+
+const reopenedRegistry = await IdentityStore.open(DATABASE_URL);
+const reopenedName = await reopenedRegistry.nameFor(durableToken);
+await reopenedRegistry.close();
+check("name survives PostgreSQL store close and reopen", reopenedName === originalName);
+
+const unavailableStore = await IdentityStore.open(DATABASE_URL);
+await unavailableStore.close();
+let unavailableRejected = false;
+try {
+  await unavailableStore.nameFor(newIdentityToken());
+} catch {
+  unavailableRejected = true;
+}
+check("database failure rejects instead of generating an identity", unavailableRejected);
 
 const malformed = await openSocket(URL);
 const malformedClose = waitForClose(malformed);
@@ -207,6 +249,21 @@ check("malformed identity is rejected with policy close", malformedResult.code =
 const timed = await openSocket(URL);
 const timeoutResult = await waitForClose(timed, 7_000);
 check("missing identify times out with policy close", timeoutResult.code === 1008);
+
+const firstIdentifyToken = newIdentityToken();
+const ignoredIdentifyToken = newIdentityToken();
+trackTestToken(firstIdentifyToken);
+trackTestToken(ignoredIdentifyToken);
+const pendingIdentify = track(await openSocket(URL));
+pendingIdentify.ws.send(JSON.stringify({ t: "identify", token: firstIdentifyToken }));
+pendingIdentify.ws.send(JSON.stringify({ t: "identify", token: ignoredIdentifyToken }));
+pendingIdentify.ws.send(JSON.stringify({ t: "set_mode", mode: "arena" }));
+const pendingHello = await waitFor(pendingIdentify, (message) => message.t === "hello");
+const verificationStore = await IdentityStore.open(DATABASE_URL);
+const firstIdentifyName = await verificationStore.nameFor(firstIdentifyToken);
+await verificationStore.close();
+check("only the first identify token is accepted while lookup is pending", pendingHello.you === firstIdentifyName);
+await closeConnection(pendingIdentify);
 
 const tokenA = newIdentityToken();
 const tokenB = newIdentityToken();
@@ -306,3 +363,13 @@ try {
 await Promise.all([closeConnection(a), closeConnection(reconnectedB), closeConnection(replacement), closeConnection(helper)]);
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exitCode = fail ? 1 : 0;
+  } finally {
+    try {
+      await primaryRelay.stop();
+    } finally {
+      await cleanupTestIdentities();
+    }
+  }
+}
+
+await runTests();

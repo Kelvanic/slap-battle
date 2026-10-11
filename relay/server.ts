@@ -162,7 +162,10 @@ function deliverSlap(p: Peer, target: Peer, kind: string, now: number): string |
   return null;
 }
 
-const identityStore = new IdentityStore();
+const identityStore = await IdentityStore.open().catch(() => {
+  console.error("relay startup failed");
+  process.exit(1);
+});
 const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_PAYLOAD_BYTES });
 wss.on("listening", () => {
   const address = wss.address();
@@ -172,6 +175,7 @@ wss.on("listening", () => {
 wss.on("connection", (ws) => {
   let p: Peer | null = null;
   let identifyExpired = false;
+  let identifyPending = false;
   const identifyTimeout = setTimeout(() => {
     identifyExpired = true;
     ws.close(1008, "identify timeout");
@@ -186,9 +190,9 @@ wss.on("connection", (ws) => {
     notifyRoom(oldRoom);
   });
 
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
     if (!p) {
-      if (identifyExpired || ws.readyState !== WebSocket.OPEN) return;
+      if (identifyPending || identifyExpired || ws.readyState !== WebSocket.OPEN) return;
       let message: unknown;
       try { message = parseMessage(raw); } catch {
         ws.close(1008, "invalid identify");
@@ -199,8 +203,16 @@ wss.on("connection", (ws) => {
         ws.close(1008, "invalid identify");
         return;
       }
+      identifyPending = true;
       clearTimeout(identifyTimeout);
-      const name = identityStore.nameFor(identify.data.token);
+      let name: string;
+      try {
+        name = await identityStore.nameFor(identify.data.token);
+      } catch {
+        if (ws.readyState === WebSocket.OPEN) ws.close(1011, "identity unavailable");
+        return;
+      }
+      if (ws.readyState !== WebSocket.OPEN) return;
       const previous = peers.get(name);
       let oldRoom: string | null = null;
       if (previous) {

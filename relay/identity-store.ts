@@ -1,46 +1,71 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { Database, type Statement } from "bun:sqlite";
+import { readFile } from "node:fs/promises";
+import { Pool } from "pg";
 import { randomName } from "./names";
 
 interface IdentityRow { name: string; }
 
 export class IdentityStore {
-  private readonly db: Database;
-  private readonly findName: Statement<IdentityRow, [string]>;
-  private readonly insertIdentity: Statement<unknown, [string, string]>;
+  private constructor(private readonly pool: Pool) {}
 
-  constructor(dataDir = process.env.DATA_DIR || join(import.meta.dir, "data")) {
-    mkdirSync(dataDir, { recursive: true });
-    this.db = new Database(join(dataDir, "identities.sqlite"));
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA synchronous = FULL");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS identities (
-        token_hash TEXT PRIMARY KEY NOT NULL CHECK (length(token_hash) = 64),
-        name TEXT NOT NULL UNIQUE
-      ) WITHOUT ROWID
-    `);
-    this.findName = this.db.query<IdentityRow, [string]>("SELECT name FROM identities WHERE token_hash = ?");
-    this.insertIdentity = this.db.query<unknown, [string, string]>("INSERT OR IGNORE INTO identities (token_hash, name) VALUES (?, ?)");
-  }
+  static async open(databaseUrl = process.env.DATABASE_URL): Promise<IdentityStore> {
+    if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
-  nameFor(token: string): string {
-    const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
-    const existing = this.findName.get(tokenHash);
-    if (existing) return existing.name;
-
-    while (true) {
-      this.insertIdentity.run(tokenHash, randomName());
-      const inserted = this.findName.get(tokenHash);
-      if (inserted) return inserted.name;
+    let pool: Pool | null = null;
+    try {
+      const schema = await readFile(new URL("./schema.sql", import.meta.url), "utf8");
+      const connectionUrl = new URL(databaseUrl);
+      for (const key of ["sslmode", "sslrootcert", "sslcert", "sslkey", "sslpassword"]) {
+        connectionUrl.searchParams.delete(key);
+      }
+      pool = new Pool({
+        connectionString: connectionUrl.toString(),
+        ssl: { rejectUnauthorized: true },
+        connectionTimeoutMillis: 10_000,
+        query_timeout: 10_000,
+      });
+      pool.on("error", () => {
+        console.error("identity database connection failed");
+      });
+      await pool.query(schema);
+      return new IdentityStore(pool);
+    } catch {
+      if (pool) await pool.end().catch(() => undefined);
+      throw new Error("identity database initialization failed");
     }
   }
 
-  close(): void {
-    this.db.close();
+  async nameFor(token: string): Promise<string> {
+    const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
+    try {
+      const current = await this.pool.query<IdentityRow>(
+        "SELECT name FROM slap_battle.identities WHERE token_hash = $1",
+        [tokenHash],
+      );
+      const currentName = current.rows[0]?.name;
+      if (currentName) return currentName;
+      while (true) {
+        const inserted = await this.pool.query<IdentityRow>(
+          "INSERT INTO slap_battle.identities (token_hash, name) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING name",
+          [tokenHash, randomName()],
+        );
+        const insertedName = inserted.rows[0]?.name;
+        if (insertedName) return insertedName;
+
+        const existing = await this.pool.query<IdentityRow>(
+          "SELECT name FROM slap_battle.identities WHERE token_hash = $1",
+          [tokenHash],
+        );
+        const existingName = existing.rows[0]?.name;
+        if (existingName) return existingName;
+      }
+    } catch {
+      throw new Error("identity database unavailable");
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }
 
