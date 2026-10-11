@@ -173,8 +173,12 @@ final class UpdateChecker: NSObject, ObservableObject, UNUserNotificationCenterD
 
   private func refreshNotificationStatus() async {
     guard let center else { return }
-    let settings = await center.notificationSettings()
-    notificationsEnabled = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+    notificationsEnabled = await withCheckedContinuation { continuation in
+      center.getNotificationSettings { settings in
+        let enabled = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+        continuation.resume(returning: enabled)
+      }
+    }
   }
 
   private func notifyIfNeeded() async {
