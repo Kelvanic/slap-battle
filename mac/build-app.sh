@@ -12,8 +12,9 @@ case "$ARCH" in x86_64|arm64) ;; *) printf 'Unsupported SLAP_ARCH: %s\n' "$ARCH"
 swift build -c release --arch "$ARCH"
 BIN="$(swift build -c release --arch "$ARCH" --show-bin-path)"
 APP="$OUTPUT_DIR/SlapBattle.app"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Assets/SlapBattle.icns" "$APP/Contents/Resources/SlapBattle.icns"
 if [[ -n "$VERSION" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 fi

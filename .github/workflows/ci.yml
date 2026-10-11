@@ -45,3 +45,6 @@ jobs:
       - name: Build release configuration
         working-directory: mac
         run: swift build -c release
+      - name: Build app bundle with icon
+        working-directory: mac
+        run: ./build-app.sh

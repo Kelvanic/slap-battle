@@ -2,6 +2,8 @@
 
 A Mac menu-bar game with preset slap effects, private crew rooms, and an opt-in arena.
 
+<img src="mac/Assets/AppIcon.png" width="128" alt="Slap Battle app icon: an illustrated high-five hand on a slate tile">
+
 ## Run locally
 
 ```bash
@@ -29,6 +31,22 @@ open .build/SlapBattle.app
 ```
 
 Keep the bundle identifier `com.kelvanic.slapbattle` and signing identity consistent between releases so macOS can authorize the same Keychain item. Without `SLAP_SIGN_IDENTITY`, packaging uses an ad-hoc signature for development only. Release artifacts are Developer ID-signed; notarization status must be checked in the release notes.
+
+### App artwork
+
+The original illustrated app icon is bundled as `Contents/Resources/SlapBattle.icns`
+before signing. It is referenced by `CFBundleIconFile` for Finder and app packages.
+To regenerate all native sizes from the code-owned vector drawing:
+
+```bash
+cd mac
+swift Tools/GenerateIcon.swift Assets
+iconutil -c icns Assets/SlapBattle.iconset -o Assets/SlapBattle.icns
+```
+
+The menu-bar status icon remains a monochrome system symbol for readability.
+The published v1.0.0 download assets are immutable and do not include this later
+artwork; build from current source or use the next release for the illustrated icon.
 
 ## CI, releases, and deployment
 
