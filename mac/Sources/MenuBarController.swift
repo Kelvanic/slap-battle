@@ -11,6 +11,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
   private var hitObservation: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    model.updates.start()
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     statusItem = item
     if let button = item.button {
@@ -26,6 +27,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     popover.contentViewController = NSHostingController(rootView: PopupContent(
       relay: model.relay,
       fx: model.fx,
+      updates: model.updates,
       resize: { [weak self] size in
         guard let self, size.width > 0, size.height > 0 else { return }
         let rounded = NSSize(width: ceil(size.width), height: ceil(size.height))
@@ -64,10 +66,11 @@ private struct PopupSize: PreferenceKey {
 private struct PopupContent: View {
   @ObservedObject var relay: RelayClient
   @ObservedObject var fx: SlapFX
+  @ObservedObject var updates: UpdateChecker
   let resize: @MainActor (CGSize) -> Void
 
   var body: some View {
-    ContentView(relay: relay, fx: fx)
+    ContentView(relay: relay, fx: fx, updates: updates)
       .fixedSize(horizontal: false, vertical: true)
       .background(GeometryReader { geometry in
         Color.clear.preference(key: PopupSize.self, value: geometry.size)

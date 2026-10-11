@@ -4,5 +4,8 @@ import PackageDescription
 let package = Package(
   name: "SlapBattle",
   platforms: [.macOS(.v14)],
-  targets: [.executableTarget(name: "SlapBattle", path: "Sources")]
+  targets: [
+    .executableTarget(name: "SlapBattle", path: "Sources"),
+    .testTarget(name: "SlapBattleTests", dependencies: ["SlapBattle"], path: "Tests")
+  ]
 )

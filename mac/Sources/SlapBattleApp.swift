@@ -5,6 +5,7 @@ import SwiftUI
 final class AppModel: ObservableObject {
   let relay = RelayClient()
   let fx = SlapFX()
+  let updates = UpdateChecker()
 
   init() {
     relay.onSlapped = { [fx] from, kind in fx.fire(kind: kind, from: from) }
@@ -35,6 +36,7 @@ enum Mode: String, CaseIterable, Identifiable {
 struct ContentView: View {
   @ObservedObject var relay: RelayClient
   @ObservedObject var fx: SlapFX
+  @ObservedObject var updates: UpdateChecker
   @State private var room = ""
   @State private var kind = "slap"
   @State private var showActivity = false
@@ -45,6 +47,7 @@ struct ContentView: View {
     VStack(alignment: .leading, spacing: 14) {
       toolbar
       identity
+      if let release = updates.available { updateBanner(release) }
       modePicker
       if relay.mode == Mode.solo.rawValue {
         quietState
@@ -61,6 +64,14 @@ struct ContentView: View {
           .fixedSize(horizontal: false, vertical: true)
       }
       if !relay.feed.isEmpty { activity }
+      if let status = updates.status {
+        Text(status).font(.system(size: 11)).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if let status = updates.notificationStatus {
+        Text(status).font(.system(size: 11)).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       Divider().opacity(0.55)
       footer
     }
@@ -87,6 +98,18 @@ struct ContentView: View {
         .font(.system(size: 11)).foregroundStyle(.secondary)
       Menu {
         Button(fx.panicked ? "Resume effects" : "Pause effects") { toggleEffects() }
+        Button(updates.isChecking ? "Checking for updates…" : "Check for updates") {
+          Task { await updates.check(showStatus: true) }
+        }
+        .disabled(updates.isChecking)
+        if !updates.notificationsEnabled {
+          Button("Enable update notifications") {
+            Task { await updates.enableNotifications() }
+          }
+        }
+        if let version = updates.installedVersion {
+          Text("Version \(version.description)")
+        }
         Divider()
         Button("Quit Slap Battle") { NSApp.terminate(nil) }
       } label: {
@@ -95,6 +118,29 @@ struct ContentView: View {
       .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
       .accessibilityLabel("App options")
     }
+  }
+  private func updateBanner(_ release: ReleaseUpdate) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label("Version \(release.version.description) is available", systemImage: "arrow.down.circle")
+        .font(.system(size: 12, weight: .semibold))
+      Text("Review the release notes before installing. Your username stays the same.")
+        .font(.system(size: 11)).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      HStack(spacing: 14) {
+        Button("Download for this Mac") { updates.openDownload() }
+          .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+        Button("Release notes") { updates.openRelease() }
+          .buttonStyle(.plain).font(.system(size: 11))
+      }
+      .foregroundStyle(Theme.accent)
+      if !updates.notificationsEnabled {
+        Button("Notify me about updates") { Task { await updates.enableNotifications() } }
+          .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
   }
 
   private var identity: some View {

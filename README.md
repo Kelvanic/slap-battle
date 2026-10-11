@@ -72,7 +72,24 @@ This release has not been checked by Apple's notarization service.
 Each release contains `SlapBattle-VERSION-macos-arm64.dmg`, an app ZIP,
 the corresponding `x86_64` DMG/ZIP, and `SHA256SUMS`. Choose arm64 for Apple Silicon,
 x86_64 for Intel. These are separate architecture packages, not a universal binary.
-Updates are manual downloads; an in-app automatic updater is not implemented.
+The app checks the public GitHub latest-release endpoint at launch and every six
+hours while running. It offers only a newer stable version with an uploaded DMG
+for the running architecture; drafts, prereleases, and equal/older versions are
+not offered. The panel shows a new-version card with release notes and a download
+link. App options include **Check for updates** and **Enable update notifications**.
+System notifications are opt-in; a successful notification is remembered locally
+and isn't repeated for that version. If permission is denied, the update card
+still works. Automatic checks do not prompt for notification permission.
+
+Updates are manual: the buttons open GitHub in the browser, and the user reviews
+the notes and installs the package. No executable is automatically downloaded or
+replaced. GitHub receives ordinary network requests including your IP address and
+app version; device credentials and usernames are never included. No GitHub login
+or API token is needed. Notification preferences/deduplication are stored in the
+app's UserDefaults, separate from the permanent identity in Keychain.
+
+The original v1.0.0 assets do not contain update notifications or the later app
+icon. These features are in current source and the next packaged release.
 
 ### Installing the signed-only v1.0.0 release
 
