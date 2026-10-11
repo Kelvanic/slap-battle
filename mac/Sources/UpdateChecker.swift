@@ -157,17 +157,21 @@ final class UpdateChecker: NSObject, ObservableObject, UNUserNotificationCenterD
       notificationStatus = "Notifications require the installed Slap Battle app."
       return
     }
-    do {
-      _ = try await center.requestAuthorization(options: [.alert])
-      await refreshNotificationStatus()
-      if !notificationsEnabled {
-        notificationStatus = "Allow Slap Battle in System Settings → Notifications. Updates still appear here."
-      } else {
-        notificationStatus = nil
-        await notifyIfNeeded()
+    let completed = await withCheckedContinuation { continuation in
+      center.requestAuthorization(options: [.alert]) { _, error in
+        continuation.resume(returning: error == nil)
       }
-    } catch {
+    }
+    guard completed else {
       notificationStatus = "Couldn't enable notifications. Updates still appear in this panel."
+      return
+    }
+    await refreshNotificationStatus()
+    if !notificationsEnabled {
+      notificationStatus = "Allow Slap Battle in System Settings → Notifications. Updates still appear here."
+    } else {
+      notificationStatus = nil
+      await notifyIfNeeded()
     }
   }
 
@@ -191,10 +195,14 @@ final class UpdateChecker: NSObject, ObservableObject, UNUserNotificationCenterD
     content.title = "Slap Battle \(version) is available"
     content.body = "Open the release notes and download the update for your Mac."
     let request = UNNotificationRequest(identifier: Self.notificationPrefix + version, content: content, trigger: nil)
-    do {
-      try await center.add(request)
+    let delivered = await withCheckedContinuation { continuation in
+      center.add(request) { error in
+        continuation.resume(returning: error == nil)
+      }
+    }
+    if delivered {
       defaults.set(version, forKey: "updates.lastNotifiedVersion")
-    } catch {
+    } else {
       notificationStatus = "Update available; system notification couldn't be delivered."
     }
   }
