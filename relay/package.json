@@ -12,8 +12,9 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.2",
     "@types/pg": "^8.23.1",
-    "@types/ws": "^8.5.13"
+    "@types/ws": "^8.5.13",
+    "typescript": "5.9.3"
   }
 }

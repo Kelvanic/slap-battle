@@ -30,6 +30,57 @@ open .build/SlapBattle.app
 
 Keep the bundle identifier `com.kelvanic.slapbattle` and signing identity consistent between releases so macOS can authorize the same Keychain item. Without `SLAP_SIGN_IDENTITY`, packaging uses an ad-hoc signature for development only. Developer ID signing is supported here; notarization and public distribution are separate steps and have not been completed.
 
+## CI, releases, and deployment
+
+Source and downloads are public at [Kelvanic/slap-battle](https://github.com/Kelvanic/slap-battle).
+Official distribution packages appear in [GitHub Releases](https://github.com/Kelvanic/slap-battle/releases)
+only after signing and notarization succeed. No notarized release has been published yet.
+
+- `CI`: pull requests, main pushes, and version tags run strict relay typechecks,
+  Docker build, 22 protocol checks against an isolated TLS PostgreSQL container,
+  and debug/release builds on Apple Silicon and Intel macOS runners. No production
+  database credentials are required. Run `./relay/ci-check.sh` locally with Bun,
+  Docker, and OpenSSL.
+- `Deploy relay`: successful main-push CI triggers Coolify deployment. Direct
+  push deployments in Coolify are disabled. The workflow refuses a stale checked
+  commit when main has moved. Manual deployments also require successful CI.
+- `Release`: push an existing release commit as `vMAJOR.MINOR.PATCH` (for example
+  `git tag v0.1.0 && git push origin v0.1.0`) or manually select an existing tag.
+  Successful CI for that exact commit is required. Both architectures must produce
+  accepted Apple notarizations and stapled packages before a public release appears.
+
+Each release contains `SlapBattle-VERSION-macos-arm64.dmg`, its stapled-app ZIP,
+the corresponding `x86_64` DMG/ZIP, and `SHA256SUMS`. Choose arm64 for Apple Silicon,
+x86_64 for Intel. These are separate architecture packages, not a universal binary.
+Updates are manual downloads; an in-app automatic updater is not implemented.
+
+### Required GitHub configuration
+
+Deployment secrets/variables: `COOLIFY_TOKEN`, `COOLIFY_URL`, `COOLIFY_APP_UUID`.
+Store deployment credentials only in GitHub secrets; use a narrowly scoped Coolify
+deploy token when available. Configure the `production` environment as appropriate.
+
+Configure the `release` environment with:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE_P12` | Base64 Developer ID certificate **and private key** export |
+| `APPLE_CERTIFICATE_PASSWORD` | Password protecting that export |
+| `APPLE_SIGNING_IDENTITY` | Exact Developer ID Application signing identity |
+| `APPLE_NOTARY_KEY_ID` | App Store Connect API key ID |
+| `APPLE_NOTARY_ISSUER_ID` | App Store Connect issuer ID |
+| `APPLE_NOTARY_PRIVATE_KEY` | Corresponding `.p8` private key contents |
+
+Do not commit these values. Hosted runners need the P12; the local Keychain is not
+uploaded automatically. Release tooling deletes its temporary keychain and private
+key files after use. Missing signing/notarization credentials fail the release.
+For local releases, use `SLAP_NOTARY_PROFILE` instead of the three API-key secrets.
+Set `SLAP_VERSION`, `SLAP_BUILD_NUMBER`, and `SLAP_ARCH`, then run `mac/release.sh`.
+
+Require pull requests and successful `Relay checks` plus both `Mac build` checks
+on main. Do not use production `DATABASE_URL` in CI. Never publish an unsigned
+package as a substitute for a failed notarized release.
+
 ## Persistent names
 
 The first connection assigns a unique random username. The Mac generates a 32-byte secret and stores it under the fixed `Kelvanic SlapBattle v1` service in the current user's non-synchronizing, device-only Keychain. It is sent only in the first WebSocket message, never in a URL or log. The relay stores the credential's SHA-256 hash and permanent username in Neon Postgres, not the raw credential.

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  relay-checks:
+    name: Relay checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Run relay checks
+        run: ./relay/ci-check.sh
+
+  mac-build:
+    name: Mac build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-15
+          - macos-15-intel
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build debug configuration
+        working-directory: mac
+        run: swift build -c debug
+      - name: Build release configuration
+        working-directory: mac
+        run: swift build -c release

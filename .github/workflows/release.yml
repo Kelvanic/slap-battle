@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vMAJOR.MINOR.PATCH tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate tag and CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Resolve and validate release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then tag="$INPUT_TAG"; else tag="$REF_NAME"; fi
+          [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo 'Release tag must match vMAJOR.MINOR.PATCH.' >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - name: Checkout exact tag commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture selected commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Confirm successful CI for this tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CI_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            echo "Waiting for CI, attempt $attempt/30"
+            count="$(gh run list --workflow ci.yml --commit "$CI_SHA" --json conclusion,event,headSha,status --jq '[.[] | select(.event == "push" and .headSha == env.CI_SHA and .status == "completed" and .conclusion == "success")] | length')"
+            if [[ "$count" -gt 0 ]]; then exit 0; fi
+            sleep 20
+          done
+          echo 'No successful CI run for this exact tag commit was found.' >&2
+          exit 1
+
+  package:
+    name: Package ${{ matrix.arch }}
+    needs: validate
+    runs-on: macos-15
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - name: Confirm selected tag commit
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Build, sign, notarize, and package
+        working-directory: mac
+        env:
+          SLAP_ARCH: ${{ matrix.arch }}
+          SLAP_VERSION: ${{ needs.validate.outputs.version }}
+          SLAP_BUILD_NUMBER: ${{ github.run_number }}
+          SLAP_OUTPUT_DIR: ${{ runner.temp }}/slap-output
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: ./release.sh
+      - name: Upload notarized packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-packages-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/slap-output/*.dmg
+            ${{ runner.temp }}/slap-output/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download all architecture packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-packages-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify complete asset set and create checksums
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          expected=("SlapBattle-${{ needs.validate.outputs.version }}-macos-arm64.dmg" "SlapBattle-${{ needs.validate.outputs.version }}-macos-arm64.zip" "SlapBattle-${{ needs.validate.outputs.version }}-macos-x86_64.dmg" "SlapBattle-${{ needs.validate.outputs.version }}-macos-x86_64.zip")
+          for file in "${expected[@]}"; do [[ -s "$file" ]] || { echo "Missing release asset: $file" >&2; exit 1; }; done
+          [[ "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 4 ]] || { echo 'Unexpected package artifact set.' >&2; exit 1; }
+          shasum -a 256 "${expected[@]}" > SHA256SUMS
+      - name: Create draft and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --draft --verify-tag --title "Slap Battle $TAG" --notes "Notarized macOS downloads for Intel and Apple silicon. Verify downloaded files with SHA256SUMS."
+          gh release upload "$TAG" release-assets/* --clobber
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false

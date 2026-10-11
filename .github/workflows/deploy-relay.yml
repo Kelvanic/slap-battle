@@ -1,0 +1,56 @@
+name: Deploy relay
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: relay-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check main and successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$current" != "$CHECKED_SHA" ]]; then
+            echo 'Refusing deployment: main moved beyond the checked commit.' >&2
+            exit 1
+          fi
+          if [[ '${{ github.event_name }}' == 'workflow_dispatch' ]]; then
+            gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$CHECKED_SHA&status=success" --jq '.workflow_runs | any(.event == "push" and .head_branch == "main")' | grep -qx true
+          fi
+      - name: Deploy and verify Coolify result
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_APP_UUID: ${{ vars.COOLIFY_APP_UUID }}
+        run: |
+          set -euo pipefail
+          test -n "$COOLIFY_TOKEN" && test -n "$COOLIFY_URL" && test -n "$COOLIFY_APP_UUID"
+          response=$(curl --fail --silent --show-error -X POST "${COOLIFY_URL%/}/api/v1/deploy" -H "Authorization: Bearer $COOLIFY_TOKEN" -H 'Content-Type: application/json' --data "{\"uuid\":\"$COOLIFY_APP_UUID\",\"force\":false}")
+          deployment=$(printf '%s' "$response" | jq -er '.deployments[0].deployment_uuid')
+          for attempt in $(seq 1 60); do
+            result=$(curl --fail --silent --show-error "${COOLIFY_URL%/}/api/v1/deployments/$deployment" -H "Authorization: Bearer $COOLIFY_TOKEN")
+            status=$(printf '%s' "$result" | jq -r '.status')
+            echo "Checking deployment, attempt $attempt/60"
+            case "$status" in
+              finished) echo 'Coolify deployment finished.'; exit 0 ;;
+              failed|cancelled) echo "Coolify deployment $status" >&2; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo 'Deployment did not complete before deadline.' >&2
+          exit 1
