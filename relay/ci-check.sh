@@ -57,19 +57,17 @@ docker run --detach --name "$container_name" \
 container_started=1
 
 db_port="$(docker port "$container_name" 5432/tcp | cut -d: -f2)"
+export NODE_EXTRA_CA_CERTS="$work_dir/tls/ca.crt"
+export DATABASE_URL="postgresql://postgres:${db_password}@127.0.0.1:${db_port}/postgres"
 for attempt in $(seq 1 60); do
-  if docker exec "$container_name" pg_isready --username=postgres --dbname=postgres >/dev/null 2>&1; then
+  if bun -e 'import { Pool } from "pg"; const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 3000 }); try { await pool.query("SELECT 1"); } finally { await pool.end(); }' >/dev/null 2>&1; then
     break
   fi
   if [[ "$attempt" == 60 ]]; then
-    echo "temporary PostgreSQL did not become ready" >&2
+    echo "temporary TLS PostgreSQL did not become ready" >&2
     docker logs "$container_name" >&2
     exit 1
   fi
   sleep 1
 done
-
-export NODE_EXTRA_CA_CERTS="$work_dir/tls/ca.crt"
-export DATABASE_URL="postgresql://postgres:${db_password}@127.0.0.1:${db_port}/postgres"
-bun -e 'import { Pool } from "pg"; const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: true }, connectionTimeoutMillis: 3000 }); try { await pool.query("SELECT 1"); } finally { await pool.end(); }'
 bun test.ts
